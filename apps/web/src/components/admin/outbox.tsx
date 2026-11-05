@@ -1,7 +1,9 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState, ErrorState, ListSkeleton } from "@/components/states";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -34,6 +36,25 @@ function cell(value: unknown): string {
   return String(value);
 }
 
+/** The worker gives up after this many attempts; a row still unprocessed at that point is dead. */
+const MAX_ATTEMPTS = 5;
+
+/** An unprocessed outbox row is either still waiting for the worker or has failed for good. */
+function processedCell(row: Row): ReactNode {
+  if (row.processedAt !== null && row.processedAt !== undefined) return cell(row.processedAt);
+  const attempts = typeof row.attempts === "number" ? row.attempts : 0;
+  const failed = Boolean(row.lastError) || attempts >= MAX_ATTEMPTS;
+  return (
+    <Badge
+      variant="secondary"
+      className={failed ? "bg-rose-100 text-rose-900" : "bg-amber-100 text-amber-900"}
+      title={typeof row.lastError === "string" ? row.lastError : undefined}
+    >
+      {failed ? "failed" : "pending"}
+    </Badge>
+  );
+}
+
 function DataTable({ rows }: { rows: Row[] }) {
   const columns = Array.from(new Set(rows.flatMap((r) => Object.keys(r ?? {})))).slice(0, 8);
   return (
@@ -56,7 +77,7 @@ function DataTable({ rows }: { rows: Row[] }) {
                 className="max-w-80 truncate first:pl-4 last:pr-4"
                 title={typeof row[c] === "string" ? (row[c] as string) : undefined}
               >
-                {cell(row[c])}
+                {c === "processedAt" ? processedCell(row) : cell(row[c])}
               </TableCell>
             ))}
           </TableRow>

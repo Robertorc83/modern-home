@@ -116,8 +116,12 @@ export function ShowingsInbox({
   };
   const visible = tab === "All" ? all : all.filter((s) => s.status === tab);
 
+  const hasActions = (s: Showing) => canRespond && s.status === "Requested" && !isPast(s);
+  // No row the viewer can act on (admins, or a tab of confirmed showings): skip the empty column.
+  const showActions = visible.some(hasActions);
+
   const actionsFor = (s: Showing) =>
-    canRespond && s.status === "Requested" && !isPast(s) ? (
+    hasActions(s) ? (
       <div className="flex justify-end gap-2">
         <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => respond(s, "decline")}>
           {busy === `${s.id}:decline` ? <Loader2 className="animate-spin" /> : <X />}
@@ -187,10 +191,8 @@ export function ShowingsInbox({
                   <ListingThumb listing={listingsById.get(s.listingId)} className="w-16 shrink-0" />
                   <div className="min-w-0 flex-1 space-y-0.5">
                     <div className="font-medium">{listingTimeLabel(s)}</div>
-                    <div className="truncate text-sm">
-                      {s.listingAddress}
-                      <span className="text-muted-foreground"> · {s.listingCity}</span>
-                    </div>
+                    {/* Address only: with the city appended it truncates on narrow phones. */}
+                    <div className="truncate text-sm">{s.listingAddress}</div>
                     <div className="text-xs text-muted-foreground">
                       {s.buyerName}
                       {showAgent ? ` · with ${s.agentName}` : ""} · requested {formatRelative(s.createdAt)}
@@ -212,7 +214,7 @@ export function ShowingsInbox({
                   <TableHead>Buyer</TableHead>
                   {showAgent ? <TableHead>Agent</TableHead> : null}
                   <TableHead>Status</TableHead>
-                  {canRespond ? <TableHead className="pr-4 text-right">Actions</TableHead> : null}
+                  {showActions ? <TableHead className="pr-4 text-right">Actions</TableHead> : null}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -241,7 +243,7 @@ export function ShowingsInbox({
                     <TableCell>
                       <StatusBadge status={s.status} />
                     </TableCell>
-                    {canRespond ? <TableCell className="pr-4">{actionsFor(s)}</TableCell> : null}
+                    {showActions ? <TableCell className="pr-4">{actionsFor(s)}</TableCell> : null}
                   </TableRow>
                 ))}
               </TableBody>

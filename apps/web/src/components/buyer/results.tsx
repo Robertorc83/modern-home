@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState, type ReactNode } from "react";
-import { DistanceBadge, ListingFacts, ListingPlace } from "@/components/listing/listing-card";
+import { DistanceBadge, DistanceText, ListingFacts, ListingPlace } from "@/components/listing/listing-card";
 import { ListingPhoto } from "@/components/listing/listing-photo";
 import { SlotChip, SlotDays } from "@/components/slots";
 import { EmptyState } from "@/components/states";
@@ -53,6 +53,7 @@ function ResultShell({
                 </Link>
               </h3>
             </div>
+            <DistanceText km={distanceKm} />
             <ListingPlace listing={listing} />
             <ListingFacts listing={listing} />
           </div>

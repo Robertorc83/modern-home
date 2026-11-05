@@ -164,6 +164,9 @@ export function FindShowings() {
   }
 
   const showResults = submitted && (response !== null || error !== null || activeRanges !== null);
+  // Invalid manual ranges stop the search from re-running, so what is on screen no longer follows
+  // the form (filters included) until they are fixed.
+  const resultsStale = submitted && mode === "manual" && !manualValid && response !== null;
 
   return (
     <>
@@ -256,7 +259,12 @@ export function FindShowings() {
               ))}
             </div>
           ) : (
-            <div className={cn("transition-opacity", searching && "opacity-60")}>
+            <div className={cn("transition-opacity", (searching || resultsStale) && "opacity-60")}>
+              {resultsStale ? (
+                <p role="status" className="mb-2 text-xs text-muted-foreground">
+                  Fix the time range to update results.
+                </p>
+              ) : null}
               <div className="mb-3 flex items-center justify-between gap-2">
                 <p className="text-sm text-muted-foreground">
                   {response.results.length > 0

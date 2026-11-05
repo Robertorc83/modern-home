@@ -25,11 +25,16 @@ export function ListingPlace({ listing }: { listing: Listing }) {
   );
 }
 
+/**
+ * Visual overlay on the photo. It sits inside a link that is hidden from assistive tech, so cards
+ * also render `DistanceText` in their body for screen readers.
+ */
 export function DistanceBadge({ km, className }: { km: number | null | undefined; className?: string }) {
   const distance = formatDistance(km);
   if (!distance) return null;
   return (
     <span
+      aria-hidden
       className={cn(
         "inline-flex items-center gap-1 rounded-full bg-background/95 px-2 py-0.5 text-xs font-medium text-foreground shadow-sm",
         className,
@@ -39,6 +44,13 @@ export function DistanceBadge({ km, className }: { km: number | null | undefined
       {distance}
     </span>
   );
+}
+
+/** Screen-reader-only counterpart of `DistanceBadge`. */
+export function DistanceText({ km }: { km: number | null | undefined }) {
+  const distance = formatDistance(km);
+  if (!distance) return null;
+  return <span className="sr-only">{distance}</span>;
 }
 
 /**
@@ -99,6 +111,7 @@ export function ListingCard({
             listing.address
           )}
         </h3>
+        <DistanceText km={distanceKm} />
         <ListingPlace listing={listing} />
         <ListingFacts listing={listing} />
         {footer ? <div className="mt-auto pt-3">{footer}</div> : null}

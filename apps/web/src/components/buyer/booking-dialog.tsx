@@ -66,6 +66,7 @@ export function BookingDialog({
   onClose,
   onBooked,
   onSlotsChanged,
+  onHeld,
 }: {
   target: BookingTarget | null;
   searchTimeZone: string;
@@ -73,6 +74,8 @@ export function BookingDialog({
   onBooked: (showing: Showing) => void;
   /** The slot was taken by someone else (hold or booking conflict): the caller's slot list is stale. */
   onSlotsChanged?: () => void;
+  /** A hold was taken (possibly on an alternative slot after a conflict): the race is over. */
+  onHeld?: () => void;
 }) {
   const [slot, setSlot] = useState<Slot | null>(target?.slot ?? null);
   const [holdState, setHoldState] = useState<HoldState>({ kind: "holding" });
@@ -82,8 +85,10 @@ export function BookingDialog({
   const booked = useRef(false);
   const router = useRouter();
   const slotsChanged = useRef(onSlotsChanged);
+  const held = useRef(onHeld);
   useEffect(() => {
     slotsChanged.current = onSlotsChanged;
+    held.current = onHeld;
   });
 
   // Reset when a new chip is clicked.
@@ -106,7 +111,10 @@ export function BookingDialog({
     const holdPromise: Promise<SlotHold | null> = pendingRelease.then(() =>
       api.hold(listing.id, slot.startUtc, searchTimeZone).then(
         (hold) => {
-          if (active) setHoldState({ kind: "held", hold });
+          if (active) {
+            setHoldState({ kind: "held", hold });
+            held.current?.();
+          }
           return hold;
         },
         (err: unknown) => {

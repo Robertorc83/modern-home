@@ -178,13 +178,13 @@ function validate(form: DetailsForm, numbers: RuleNumbers): FieldErrors {
     const n = parseNumber(form[key]);
     if (n !== null && (Number.isNaN(n) || n < 0)) errors[key] = "Must be 0 or more.";
   }
+  // The API requires a location on every listing, drafts included.
   const lat = parseNumber(form.lat);
   const lng = parseNumber(form.lng);
-  if ((lat === null) !== (lng === null)) errors.lat = "Enter both latitude and longitude, or neither.";
-  else if (lat !== null && (Number.isNaN(lat) || lat < -90 || lat > 90))
-    errors.lat = "Latitude is -90 to 90.";
-  else if (lng !== null && (Number.isNaN(lng) || lng < -180 || lng > 180))
-    errors.lng = "Longitude is -180 to 180.";
+  if (lat === null) errors.lat = "Latitude is required. Paste coordinates from a map.";
+  else if (Number.isNaN(lat) || lat < -90 || lat > 90) errors.lat = "Latitude is -90 to 90.";
+  if (lng === null) errors.lng = "Longitude is required. Paste coordinates from a map.";
+  else if (Number.isNaN(lng) || lng < -180 || lng > 180) errors.lng = "Longitude is -180 to 180.";
   const lead = parseNumber(numbers.leadTimeHours);
   if (lead === null || !Number.isInteger(lead) || lead < 0) errors.leadTimeHours = "0 or more hours.";
   const horizon = parseNumber(numbers.horizonDays);
@@ -506,11 +506,16 @@ function EditorForm({ original, onReload }: { original: Listing | null; onReload
           <CardTitle>Details</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
-          <Field label="Address" htmlFor="address" error={errors.address} className="sm:col-span-2">
-            <Input id="address" value={form.address} onChange={(e) => setField("address", e.target.value)} />
+          <Field label="Address" htmlFor="address" error={errors.address} className="sm:col-span-2" required>
+            <Input
+              id="address"
+              required
+              value={form.address}
+              onChange={(e) => setField("address", e.target.value)}
+            />
           </Field>
-          <Field label="City" htmlFor="city" error={errors.city}>
-            <Input id="city" value={form.city} onChange={(e) => setField("city", e.target.value)} />
+          <Field label="City" htmlFor="city" error={errors.city} required>
+            <Input id="city" required value={form.city} onChange={(e) => setField("city", e.target.value)} />
           </Field>
           <Field label="Neighborhood" htmlFor="neighborhood" error={errors.neighborhood}>
             <Input
@@ -519,12 +524,13 @@ function EditorForm({ original, onReload }: { original: Listing | null; onReload
               onChange={(e) => setField("neighborhood", e.target.value)}
             />
           </Field>
-          <Field label="Price" htmlFor="price" error={errors.price}>
+          <Field label="Price" htmlFor="price" error={errors.price} required>
             <Input
               id="price"
               type="number"
               min={0}
               step={1000}
+              required
               inputMode="numeric"
               value={form.price}
               onChange={(e) => setField("price", e.target.value)}
@@ -544,22 +550,24 @@ function EditorForm({ original, onReload }: { original: Listing | null; onReload
               </SelectContent>
             </Select>
           </Field>
-          <Field label="Beds" htmlFor="beds" error={errors.beds}>
+          <Field label="Beds" htmlFor="beds" error={errors.beds} required>
             <Input
               id="beds"
               type="number"
               min={0}
               step={1}
+              required
               value={form.beds}
               onChange={(e) => setField("beds", e.target.value)}
             />
           </Field>
-          <Field label="Baths" htmlFor="baths" error={errors.baths}>
+          <Field label="Baths" htmlFor="baths" error={errors.baths} required>
             <Input
               id="baths"
               type="number"
               min={0}
               step={0.5}
+              required
               value={form.baths}
               onChange={(e) => setField("baths", e.target.value)}
             />
@@ -646,7 +654,8 @@ function EditorForm({ original, onReload }: { original: Listing | null; onReload
         <CardHeader>
           <CardTitle>Location and time zone</CardTitle>
           <CardDescription>
-            Coordinates power &quot;near&quot; search. The time zone anchors every showing window.
+            Coordinates are required: they power &quot;near&quot; search. The time zone anchors every showing
+            window.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-3">
@@ -664,21 +673,23 @@ function EditorForm({ original, onReload }: { original: Listing | null; onReload
               </SelectContent>
             </Select>
           </Field>
-          <Field label="Latitude" htmlFor="lat" error={errors.lat}>
+          <Field label="Latitude" htmlFor="lat" error={errors.lat} required>
             <Input
               id="lat"
               type="number"
               step="any"
+              required
               placeholder="39.7508"
               value={form.lat}
               onChange={(e) => setField("lat", e.target.value)}
             />
           </Field>
-          <Field label="Longitude" htmlFor="lng" error={errors.lng}>
+          <Field label="Longitude" htmlFor="lng" error={errors.lng} required>
             <Input
               id="lng"
               type="number"
               step="any"
+              required
               placeholder="-104.9997"
               value={form.lng}
               onChange={(e) => setField("lng", e.target.value)}
@@ -828,12 +839,15 @@ function Field({
   label,
   htmlFor,
   error,
+  required = false,
   className,
   children,
 }: {
   label: string;
   htmlFor: string;
   error?: string;
+  /** Marks the label with an asterisk; the control itself carries the `required` attribute. */
+  required?: boolean;
   className?: string;
   children: ReactNode;
 }) {
@@ -845,7 +859,14 @@ function Field({
       : children;
   return (
     <div className={`space-y-2 ${className ?? ""}`}>
-      <Label htmlFor={htmlFor}>{label}</Label>
+      <Label htmlFor={htmlFor}>
+        {label}
+        {required ? (
+          <span className="-ml-1.5 text-destructive" aria-hidden>
+            *
+          </span>
+        ) : null}
+      </Label>
       {control}
       {error ? (
         <p id={errorId} className="text-xs text-destructive">

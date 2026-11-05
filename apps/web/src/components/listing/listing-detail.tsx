@@ -265,8 +265,11 @@ function DetailBody({ listing }: { listing: Listing }) {
         onClose={() => setBooking(null)}
         onBooked={() => {
           setBooking(null);
+          setTimesUpdated(false);
           void slots.reload();
         }}
+        // The notice explains a lost race; once a hold or booking succeeds it has served its purpose.
+        onHeld={() => setTimesUpdated(false)}
         onSlotsChanged={() => {
           setTimesUpdated(true);
           void slots.reload();
