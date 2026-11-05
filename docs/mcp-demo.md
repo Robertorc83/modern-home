@@ -1,6 +1,6 @@
 # MCP demo: booking a showing from Claude Code
 
-A real run against the Docker stack (`docker compose up`), recorded on 2026-11-05. The MCP server needs no
+A real run against the Docker stack built from a fresh clone (`cp .env.example .env && docker compose up --build`), recorded on 2026-11-05. The MCP server needs no
 Anthropic key: Claude Code brings the model.
 
 ## 1. Create a token and register the server
@@ -27,15 +27,15 @@ $ claude
 
 ## 3. Transcript
 
-**Claude:** I'll load the showings tools, search Denver listings under $600k, find Saturday morning slots, and
-book one.
+**Claude:** I'll load the showings tools, search Denver listings under 600k, find Saturday morning slots, and book one.
+Running the listing search, the Saturday-morning slot search, and a check of existing showings in parallel.
 
 **Tool call** `search_listings` `{"city": "Denver", "maxPrice": 600000}`
 
 ```
 2 listing(s):
-- 250 Columbine St #310, Denver (Cherry Creek) · $499,000 · 1 bd / 1 ba Condo · listing id 6aec297120515b22d2ac343c
-- 1420 Larimer St #5B, Denver (LoDo) · $585,000 · 2 bd / 2 ba Condo · listing id 6aec297120515b22d2ac3436
+- 250 Columbine St #310, Denver (Cherry Creek) · $499,000 · 1 bd / 1 ba Condo · listing id 6aec399c1978317870a48f25
+- 1420 Larimer St #5B, Denver (LoDo) · $585,000 · 2 bd / 2 ba Condo · listing id 6aec399c1978317870a48f1f
 ```
 
 **Tool call** `find_open_slots` `{"availabilityText": "Saturday morning", "city": "Denver", "maxPrice": 600000}`
@@ -43,37 +43,40 @@ book one.
 ```
 Read "Saturday morning" as: Sat 8:00 AM–12:00 PM (America/Denver, next 14 days, parsed by rule-based).
 2 listing(s) with open slots (times in America/Denver):
-- 250 Columbine St #310, Denver (Cherry Creek) · $499,000 · 1 bd / 1 ba Condo · listing id 6aec297120515b22d2ac343c · 12 matching slot(s)
+- 250 Columbine St #310, Denver (Cherry Creek) · $499,000 · 1 bd / 1 ba Condo · listing id 6aec399c1978317870a48f25 · 12 matching slot(s)
     Sat, Nov 7: 8:00 AM [slotStart=2026-11-07T15:00:00Z], 8:30 AM [slotStart=2026-11-07T15:30:00Z], 9:00 AM [slotStart=2026-11-07T16:00:00Z], 9:30 AM [slotStart=2026-11-07T16:30:00Z], 10:00 AM [slotStart=2026-11-07T17:00:00Z], 10:30 AM [slotStart=2026-11-07T17:30:00Z]
-    Sat, Nov 14: 8:00 AM [slotStart=2026-11-14T15:00:00Z], 8:30 AM [slotStart=2026-11-14T15:30:00Z], 9:00 AM [slotStart=2026-11-14T16:00:00Z], ...
-- 1420 Larimer St #5B, Denver (LoDo) · $585,000 · 2 bd / 2 ba Condo · listing id 6aec297120515b22d2ac3436 · 7 matching slot(s)
+    Sat, Nov 14: 8:00 AM [slotStart=2026-11-14T15:00:00Z], 8:30 AM [slotStart=2026-11-14T15:30:00Z], ...
+- 1420 Larimer St #5B, Denver (LoDo) · $585,000 · 2 bd / 2 ba Condo · listing id 6aec399c1978317870a48f1f · 7 matching slot(s)
     Sat, Nov 7: 9:00 AM [slotStart=2026-11-07T16:00:00Z], 9:45 AM [slotStart=2026-11-07T16:45:00Z], 10:30 AM [slotStart=2026-11-07T17:30:00Z]
     Sat, Nov 14: 9:00 AM [slotStart=2026-11-14T16:00:00Z], 9:45 AM [slotStart=2026-11-14T16:45:00Z], 10:30 AM [slotStart=2026-11-14T17:30:00Z], 11:15 AM [slotStart=2026-11-14T18:15:00Z]
 ```
 
-**Claude:** Both listings have slots this Saturday. I'll book the 2-bed LoDo condo at 9:45 AM on Nov 7.
+**Tool call** `list_my_showings` `{}`
 
-**Tool call** `book_showing` `{"listingId": "6aec297120515b22d2ac3436", "slotStart": "2026-11-07T16:45:00Z"}`
+```
+- Confirmed: 250 Columbine St #310, Denver on Fri, Nov 6, 12:00 PM MST (showing id 6aec399d1978317870a48f50)
+```
+
+**Claude:** Two listings matched. You already have a confirmed showing at the Columbine St condo tomorrow, so I'll book
+the other one, 1420 Larimer St #5B, this Saturday at 9:00 AM.
+
+**Tool call** `book_showing` `{"listingId": "6aec399c1978317870a48f1f", "slotStart": "2026-11-07T16:00:00Z"}`
 *(not marked read only, so an interactive Claude Code session asks for approval here)*
 
 ```
-Requested: 1420 Larimer St #5B, Denver on Sat, Nov 7, 9:45 AM MST. Agent: Alex Rivera. Status: Requested. Showing id: 6aec2b6d915d57d7be571dcd.
+Requested: 1420 Larimer St #5B, Denver on Sat, Nov 7, 9:00 AM MST. Agent: Alex Rivera. Status: Requested. Showing id: 6aec39cd1978317870a48f96.
 ```
 
-**Claude:** Booked. The showing is requested for Saturday, Nov 7 at 9:45 AM Mountain time.
+**Claude:** Booked. Here is the summary.
 
-> **What I found** in Denver under $600k with Saturday morning availability:
-> - **1420 Larimer St #5B, LoDo** at $585,000. 2 bed / 2 bath condo. Open Sat Nov 7 at 9:00, 9:45, and 10:30 AM, plus four slots on Nov 14.
-> - **250 Columbine St #310, Cherry Creek** at $499,000. 1 bed / 1 bath condo. Open Sat Nov 7 and Nov 14 every half hour from 8:00 to 10:30 AM.
+> **What I found** in Denver under $600k with Saturday morning openings:
+> - **1420 Larimer St #5B, LoDo.** $585,000, 2 bed / 2 bath condo. Open Sat Nov 7 at 9:00, 9:45, and 10:30 AM, plus four slots on Nov 14.
+> - **250 Columbine St #310, Cherry Creek.** $499,000, 1 bed / 1 bath condo. Open every half hour from 8:00 to 10:30 AM on both Saturdays.
 >
-> **What I booked:** the Larimer St condo, since it is the only two-bedroom and a mid-morning slot was open this Saturday.
+> **What I booked:** the Larimer St condo for this Saturday, Nov 7, at 9:00 AM MST. I picked it because you already have a
+> confirmed showing at the Columbine St condo tomorrow (Friday) at noon, so this gets you into a different property.
 >
-> | Field | Value |
-> |---|---|
-> | Showing id | 6aec2b6d915d57d7be571dcd |
-> | Time | Sat, Nov 7, 2026 at 9:45 AM MST |
-> | Listing agent | Alex Rivera |
-> | Status | Requested, awaiting agent confirmation |
+> **Showing id:** `6aec39cd1978317870a48f96`. The status is Requested. The listing agent, Alex Rivera, needs to confirm it.
 
 ## 4. What happened on the other side
 
@@ -82,11 +85,11 @@ refresh, through the change stream → SSE feed:
 
 ```
 GET /showings/inbox?status=Requested   (as agent@acme.test)
-6aec2b6d915d57d7be571dcd  Bea Martin  1420 Larimer St #5B  Sat, Nov 7, 9:45 AM MST  source=mcp
+6aec39cd1978317870a48f96  Bea Martin  1420 Larimer St #5B  Sat, Nov 7, 9:00 AM MST  source=mcp
 ```
 
 The outbox row was written in the booking transaction, relayed to SQS by the Worker and delivered through SES
-(LocalStack), visible at `http://localhost:4566/_aws/ses`:
+(LocalStack) within a few seconds, visible at `http://localhost:4566/_aws/ses`:
 
 ```
 To: agent@acme.test   Subject: New showing request: 1420 Larimer St #5B
