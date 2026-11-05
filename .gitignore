@@ -1,0 +1,15 @@
+bin/
+obj/
+*.user
+.vs/
+.idea/
+.vscode/
+node_modules/
+.next/
+out/
+.env
+.env.local
+*.log
+TestResults/
+coverage/
+.DS_Store

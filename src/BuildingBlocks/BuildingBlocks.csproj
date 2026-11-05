@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>HomeShowing.BuildingBlocks</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="MongoDB.Driver" Version="3.13.0" />
+    <PackageReference Include="NodaTime" Version="3.3.7" />
+    <PackageReference Include="NodaTime.Serialization.SystemTextJson" Version="1.4.0" />
+  </ItemGroup>
+</Project>
