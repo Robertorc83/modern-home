@@ -128,6 +128,7 @@ A real transcript is in [docs/mcp-demo.md](docs/mcp-demo.md).
 ```bash
 dotnet test            # needs Docker: integration tests start a MongoDB 8 replica set with Testcontainers
 cd apps/web && npm run lint && npm run build
+cd apps/web && npx playwright install chromium && npm run test:e2e   # browser journeys against the running stack
 ```
 
 * `Scheduling.Tests`: slot generation (basic, buffers, blackouts, lead time, horizon, a window ending at midnight),
@@ -142,9 +143,13 @@ cd apps/web && npm run lint && npm run build
   index, expiry lag); a slot length change cannot create an overlapping booking; the **MCP server through the
   official SDK client** (buyer token sees only buyer tools and books; brokerage B cannot see A; agent confirms;
   missing and revoked tokens get 401).
+* `apps/web/e2e` (Playwright, against the seeded stack at `localhost:3000`): the agent journey (demo sign in,
+  listings, the showing rules editor with its slot preview); the buyer journey (describe the week in words → parse
+  → search near LoDo → open a listing → a slot hold with the countdown); and tenant isolation through the browser
+  (a Northstar buyer pasting an Acme listing URL sees *not found*).
 
 CI (`.github/workflows/ci.yml`) builds and tests the API, lints and builds the web app, then boots the whole stack
-with `docker compose up --wait` and hits the health endpoints.
+with `docker compose up --wait`, hits the health endpoints and runs the Playwright journeys against it.
 
 ## AWS
 

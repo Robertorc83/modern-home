@@ -42,3 +42,7 @@ next-env.d.ts
 
 # written by `next dev` on every start
 AGENTS.md
+
+# playwright
+/test-results/
+/playwright-report/

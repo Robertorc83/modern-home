@@ -45,6 +45,24 @@ jobs:
           docker compose up -d --build --wait
           curl -fsS http://localhost:5080/health
           curl -fsS -o /dev/null http://localhost:3000/login
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Browser journeys (Playwright) against the stack
+        working-directory: apps/web
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run test:e2e
+      - name: Playwright traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results
+          path: apps/web/test-results
+          if-no-files-found: ignore
       - name: Logs on failure
         if: failure()
         run: docker compose logs --tail=200
