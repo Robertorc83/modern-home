@@ -137,11 +137,10 @@ export function FindShowings() {
   useEffect(() => () => inFlight.current?.controller.abort(), []);
 
   function changeTimeZone(zone: string) {
+    // Both manual and parsed ranges are local wall-clock times, so they mean the same text in the
+    // new zone. Nothing is cleared: the request includes the zone, so a submitted search re-runs by
+    // itself and the results re-render in the new zone.
     setTimeZone(zone);
-    // Local ranges are meaningless in another zone: parsed text must be re-parsed. Manual ranges
-    // simply mean the same wall-clock times in the new zone, so that search re-runs by itself.
-    setParsed(null);
-    if (mode === "ai") browseAll();
   }
 
   function browseAll() {

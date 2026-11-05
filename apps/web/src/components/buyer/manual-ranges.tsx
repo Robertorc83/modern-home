@@ -59,6 +59,10 @@ export function ManualRanges({
     <div className="space-y-2">
       {ranges.map((range) => {
         const error = rangeError(range, today);
+        // Only the field at fault is outlined: a bad date marks the date input, a bad time order
+        // marks the time selects (the date is fine then).
+        const dateInvalid = error !== null && (!range.date || range.date < today);
+        const timeInvalid = error !== null && !dateInvalid;
         return (
           <div key={range.id} className="space-y-1">
             <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/20 p-2">
@@ -75,7 +79,7 @@ export function ManualRanges({
                   className="h-7 w-36 bg-background text-xs text-muted-foreground"
                   min={today}
                   value={range.date}
-                  aria-invalid={Boolean(error) || undefined}
+                  aria-invalid={dateInvalid || undefined}
                   onChange={(e) => update(range.id, { date: e.target.value })}
                 />
               </label>
@@ -93,6 +97,7 @@ export function ManualRanges({
                 <TimeSelect
                   label="From"
                   value={range.start}
+                  invalid={timeInvalid}
                   onChange={(start) => update(range.id, { start })}
                 />
                 <span className="text-sm text-muted-foreground">to</span>
@@ -100,6 +105,7 @@ export function ManualRanges({
                   label="To"
                   value={range.end}
                   includeMidnight
+                  invalid={timeInvalid}
                   onChange={(end) => update(range.id, { end })}
                 />
               </div>
