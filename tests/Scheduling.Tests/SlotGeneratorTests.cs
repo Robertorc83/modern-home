@@ -126,3 +126,48 @@ public class SlotGeneratorTests
         Assert.Equal(At("2026-11-07T14:00:00Z"), slots.Single().Start); // 09:00 EST
     }
 }
+
+public class SlotGeneratorOverlapTests
+{
+    private static readonly DateTimeZone Denver = DateTimeZoneProviders.Tzdb["America/Denver"];
+    private static Instant At(string iso) => InstantPattern.ExtendedIso.Parse(iso).Value;
+
+    [Fact]
+    public void Slots_never_overlap_across_spring_forward_even_when_the_step_does_not_divide_an_hour()
+    {
+        // 60 min slots + 30 min buffer, window 00:00-06:00 on 2027-03-14 (02:00 MST -> 03:00 MDT).
+        var rules = new ShowingRules
+        {
+            SlotMinutes = 60, BufferMinutes = 30, HorizonDays = 7, LeadTimeHours = 0,
+            Weekly = [new WeeklyWindow { DayOfWeek = "Sunday", Start = "00:00", End = "06:00" }],
+        };
+        var slots = SlotGenerator.Generate(rules, Denver, At("2027-03-10T12:00:00Z"));
+        for (var i = 1; i < slots.Count; i++)
+            Assert.True(slots[i].Start >= slots[i - 1].End + Duration.FromMinutes(30), $"{slots[i - 1]} overlaps {slots[i]}");
+        Assert.DoesNotContain(slots, s => s.Start.InZone(Denver).Hour == 2);
+    }
+
+    [Fact]
+    public void A_window_ending_at_midnight_offers_its_last_slot()
+    {
+        var rules = new ShowingRules
+        {
+            SlotMinutes = 30, HorizonDays = 7, LeadTimeHours = 0,
+            Weekly = [new WeeklyWindow { DayOfWeek = "Saturday", Start = "22:00", End = "24:00" }],
+        };
+        var slots = SlotGenerator.Generate(rules, Denver, At("2026-11-02T15:00:00Z"));
+        Assert.Equal(4, slots.Count);
+        Assert.Equal(new LocalTime(23, 30), slots[^1].Start.InZone(Denver).TimeOfDay);
+    }
+
+    [Fact]
+    public void Claims_cover_every_five_minute_bucket_of_a_slot()
+    {
+        var buckets = SlotClaim.Buckets(At("2026-11-07T16:00:00Z"), At("2026-11-07T16:45:00Z")).ToList();
+        Assert.Equal(9, buckets.Count);
+        Assert.Equal(At("2026-11-07T16:00:00Z"), buckets[0]);
+        Assert.Equal(At("2026-11-07T16:40:00Z"), buckets[^1]);
+        // A slot starting off the 5 minute grid still claims the bucket it starts in.
+        Assert.Equal(At("2026-11-07T16:00:00Z"), SlotClaim.Buckets(At("2026-11-07T16:03:00Z"), At("2026-11-07T16:10:00Z")).First());
+    }
+}

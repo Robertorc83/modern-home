@@ -11,6 +11,7 @@ public static class SchedulingModule
     {
         services.AddScoped<ShowingRepository>();
         services.AddScoped<SlotHoldRepository>();
+        services.AddScoped<SlotClaimRepository>();
         services.AddScoped<AvailabilityService>();
         services.AddScoped<BookingService>();
         services.AddScoped<ShowingChangeFeed>();

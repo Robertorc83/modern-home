@@ -26,6 +26,8 @@ internal sealed class Listing : TenantDocument
     public ShowingRules ShowingRules { get; set; } = new();
     public Instant CreatedAt { get; set; }
     public Instant UpdatedAt { get; set; }
+    /// <summary>Optimistic concurrency stamp; documents written before it existed read as 0.</summary>
+    public int Version { get; set; }
 
     public ListingDto ToDto() => new()
     {
@@ -33,5 +35,6 @@ internal sealed class Listing : TenantDocument
         Neighborhood = Neighborhood, Price = Price, Beds = Beds, Baths = Baths, PropertyType = PropertyType,
         Attributes = Attributes, Description = Description, Photos = Photos, TimeZone = TimeZone,
         Location = new GeoPoint(Location.Coordinates.Latitude, Location.Coordinates.Longitude), ShowingRules = ShowingRules,
+        Version = Version,
     };
 }

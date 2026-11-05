@@ -45,3 +45,24 @@ public sealed class SlotHold : TenantDocument
     public Instant SlotEndUtc { get; set; }
     public Instant ExpiresAt { get; set; }
 }
+
+/// <summary>
+/// One document per 5 minute bucket a showing occupies, unique per listing. The slot key alone only stops two
+/// bookings with the same start; when an agent changes the slot length, a new grid can produce a slot that
+/// overlaps an old booking under a different key. Claims make overlap impossible at the database, under any grid.
+/// </summary>
+public sealed class SlotClaim : TenantDocument
+{
+    public const int BucketMinutes = 5;
+    public string ListingId { get; set; } = "";
+    public string ShowingId { get; set; } = "";
+    public Instant BucketStartUtc { get; set; }
+
+    public static IEnumerable<Instant> Buckets(Instant start, Instant end)
+    {
+        var bucket = Duration.FromMinutes(BucketMinutes);
+        var ticks = bucket.BclCompatibleTicks;
+        var first = Instant.FromUnixTimeTicks(start.ToUnixTimeTicks() / ticks * ticks); // floor to the bucket grid
+        for (var b = first; b < end; b += bucket) yield return b;
+    }
+}

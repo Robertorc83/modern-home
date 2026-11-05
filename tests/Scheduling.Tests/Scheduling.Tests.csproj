@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Modules\Scheduling\Scheduling.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Ai\Ai.csproj" />
   </ItemGroup>
 
 </Project>

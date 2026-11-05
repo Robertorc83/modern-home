@@ -19,7 +19,7 @@ JWT claims: `sub` (user id), `tenantId`, `role` (`BrokerageAdmin` | `Agent` | `B
 | GET | `/auth/tokens` | | `[{ id, name, prefix, createdAt, lastUsedAt, revokedAt }]` |
 | POST | `/auth/tokens` | `{ name }` | `{ id, name, token }` (the raw token is shown once) |
 | DELETE | `/auth/tokens/{id}` | | 204 (revoke) |
-| GET | `/admin/agents` | BrokerageAdmin | `[{ id, name, email, listingCount }]` |
+| GET | `/admin/agents` | BrokerageAdmin (JWT only; personal access tokens get 403) | `[{ id, name, email, timeZone, listingCount }]` |
 | POST | `/admin/agents` | BrokerageAdmin `{ name, email, password }` | `user` |
 
 `user` = `{ id, email, name, role, tenantId, tenantSlug, tenantName, timeZone }`
@@ -49,7 +49,7 @@ JWT claims: `sub` (user id), `tenantId`, `role` (`BrokerageAdmin` | `Agent` | `B
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/listings?mine=true&city=&maxPrice=&minBeds=&propertyType=` | Agent with `mine=true` gets own; Buyer sees Active only; Admin sees all |
+| GET | `/listings?mine=true&city=&maxPrice=&minBeds=&propertyType=&near=&nearLat=&nearLng=&radiusKm=` | Agent with `mine=true` gets own (otherwise Active or own); Buyer sees Active only; Admin sees all. `radiusKm` 0 < r ≤ 500, lat/lng in range, else 400. Listings carry a `version` (optimistic concurrency: send it back on PUT; a stale version → 409) |
 | GET | `/listings/{id}` | 404 when not found or another tenant |
 | POST | `/listings` | Agent. Body = listing without id/owner. Returns listing |
 | PUT | `/listings/{id}` | Agent owner (or Admin). Body = listing fields |

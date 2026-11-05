@@ -26,11 +26,9 @@ public sealed class CredentialStore(MongoDb db)
     private IMongoCollection<User> Users => db.Collection<User>(UserRepository.CollectionName);
     private IMongoCollection<PersonalAccessToken> Tokens => db.Collection<PersonalAccessToken>(TokenRepository.CollectionName);
 
-    public Task<User> FindForLoginAsync(string email, CancellationToken ct) =>
-        Users.Find(u => u.Email == email.Trim().ToLowerInvariant()).FirstOrDefaultAsync(ct);
-
-    public Task<bool> EmailExistsAsync(string email, CancellationToken ct) =>
-        Users.Find(u => u.Email == email.Trim().ToLowerInvariant()).AnyAsync(ct);
+    /// <summary>Every account with this email, across tenants (emails are unique per tenant, not globally).</summary>
+    public Task<List<User>> FindForLoginAsync(string email, CancellationToken ct) =>
+        Users.Find(u => u.Email == email.Trim().ToLowerInvariant()).Limit(20).ToListAsync(ct);
 
     public Task InsertUserAsync(User u, CancellationToken ct) => Users.InsertOneAsync(u, cancellationToken: ct);
 
@@ -65,8 +63,12 @@ internal sealed class IdentitySchema : IMongoSchemaSetup
         await MongoSchema.EnsureCollectionAsync(db.Database, UserRepository.CollectionName, null, ct);
         await MongoSchema.EnsureCollectionAsync(db.Database, TokenRepository.CollectionName, null, ct);
         var users = db.Collection<User>(UserRepository.CollectionName);
+        // Emails are unique per brokerage, not globally, so registering in one brokerage cannot reveal accounts in another.
+        // Databases created before this change carry the old global index; drop it so the compound one takes over.
+        await DropIndexIfExistsAsync(users, "email_1", ct);
         await users.Indexes.CreateManyAsync([
-            new CreateIndexModel<User>(Builders<User>.IndexKeys.Ascending(u => u.Email), new CreateIndexOptions { Unique = true }),
+            new CreateIndexModel<User>(Builders<User>.IndexKeys.Ascending(u => u.TenantId).Ascending(u => u.Email), new CreateIndexOptions { Unique = true }),
+            new CreateIndexModel<User>(Builders<User>.IndexKeys.Ascending(u => u.Email), new CreateIndexOptions { Name = "ix_email_login" }),
             new CreateIndexModel<User>(Builders<User>.IndexKeys.Ascending(u => u.TenantId).Ascending(u => u.Role)),
         ], ct);
         var tokens = db.Collection<PersonalAccessToken>(TokenRepository.CollectionName);
@@ -74,5 +76,11 @@ internal sealed class IdentitySchema : IMongoSchemaSetup
             new CreateIndexModel<PersonalAccessToken>(Builders<PersonalAccessToken>.IndexKeys.Ascending(t => t.Hash), new CreateIndexOptions { Unique = true }),
             new CreateIndexModel<PersonalAccessToken>(Builders<PersonalAccessToken>.IndexKeys.Ascending(t => t.TenantId).Ascending(t => t.UserId)),
         ], ct);
+    }
+
+    private static async Task DropIndexIfExistsAsync<T>(IMongoCollection<T> col, string name, CancellationToken ct)
+    {
+        var names = await (await col.Indexes.ListAsync(ct)).ToListAsync(ct);
+        if (names.Any(i => i["name"].AsString == name)) await col.Indexes.DropOneAsync(name, ct);
     }
 }

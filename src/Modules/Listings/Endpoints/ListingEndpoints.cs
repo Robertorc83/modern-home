@@ -27,8 +27,13 @@ public static class ListingEndpoints
         g.MapPut("/{id}/showing-rules", async (string id, ShowingRules rules, ListingService svc, CancellationToken ct) =>
             (await svc.UpdateRulesAsync(id, rules, ct)).ToHttp()).RequireAuthorization("AgentOrAdmin");
 
+        g.MapPost("/{id}/photos/upload-url", async (string id, PhotoUploadRequest req, ListingService svc, CancellationToken ct) =>
+            (await svc.CreatePhotoUploadAsync(id, req.ContentType, ct)).ToHttp()).RequireAuthorization("AgentOrAdmin");
+
         return app;
     }
+
+    public sealed record PhotoUploadRequest(string ContentType);
 
     public sealed class ListingQueryParams
     {
@@ -38,11 +43,14 @@ public static class ListingEndpoints
         public int? MinBeds { get; set; }
         public PropertyType? PropertyType { get; set; }
         public string? Near { get; set; }
+        public double? NearLat { get; set; }
+        public double? NearLng { get; set; }
         public double? RadiusKm { get; set; }
 
         public ListingQuery ToQuery() => new()
         {
-            Mine = Mine ?? false, City = City, MaxPrice = MaxPrice, MinBeds = MinBeds, PropertyType = PropertyType, Near = Near, RadiusKm = RadiusKm,
+            Mine = Mine ?? false, City = City, MaxPrice = MaxPrice, MinBeds = MinBeds, PropertyType = PropertyType,
+            Near = Near, NearLat = NearLat, NearLng = NearLng, RadiusKm = RadiusKm,
         };
     }
 }

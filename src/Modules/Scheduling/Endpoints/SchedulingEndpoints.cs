@@ -1,4 +1,7 @@
+using System.Collections.Concurrent;
+using System.Globalization;
 using System.Text.Json;
+using HomeShowing.BuildingBlocks.Tenancy;
 using HomeShowing.BuildingBlocks.Web;
 using HomeShowing.Scheduling.Application;
 using HomeShowing.Scheduling.Contracts;
@@ -31,7 +34,7 @@ public static class SchedulingEndpoints
         var g = app.MapGroup("/showings").WithTags("Showings").RequireAuthorization();
 
         g.MapPost("/holds", async (HoldRequest req, BookingService svc, CancellationToken ct) =>
-            (await svc.HoldAsync(req.ListingId, req.SlotStart, ct)).ToHttp(h => TypedResults.Created($"/showings/holds/{h.Id}", h))).RequireAuthorization("Buyer");
+            (await svc.HoldAsync(req.ListingId, req.SlotStart, req.TimeZone, ct)).ToHttp(h => TypedResults.Created($"/showings/holds/{h.Id}", h))).RequireAuthorization("Buyer");
 
         g.MapDelete("/holds/{id}", async (string id, BookingService svc, CancellationToken ct) =>
             (await svc.ReleaseHoldAsync(id, ct)).ToHttp(_ => TypedResults.NoContent())).RequireAuthorization("Buyer");
@@ -48,30 +51,62 @@ public static class SchedulingEndpoints
             .RequireAuthorization("AgentOrAdmin");
 
         // Server Sent Events over a MongoDB change stream: the agent inbox and "My showings" update live.
-        g.MapGet("/stream", async (HttpContext http, ShowingChangeFeed feed, CancellationToken ct) =>
+        // Authentication is checked once at connect, so the stream ends itself when the JWT expires (the client
+        // reconnects with a fresh token), and each user may hold at most MaxStreamsPerUser connections.
+        g.MapGet("/stream", async (HttpContext http, ShowingChangeFeed feed, ITenantContext tenant, IClock clock, CancellationToken ct) =>
         {
-            http.Response.Headers.ContentType = "text/event-stream";
-            http.Response.Headers.CacheControl = "no-cache, no-transform";
-            http.Response.Headers["X-Accel-Buffering"] = "no";
-            var resume = http.Request.Headers["Last-Event-ID"].FirstOrDefault() ?? http.Request.Query["lastEventId"].FirstOrDefault();
-            await http.Response.WriteAsync("retry: 3000\n: connected\n\n", ct);
-            await http.Response.Body.FlushAsync(ct);
+            var user = tenant.UserId;
+            if (Streams.AddOrUpdate(user, 1, (_, n) => n + 1) > MaxStreamsPerUser)
+            {
+                Release(user);
+                return Results.Problem(title: "Too many live streams", detail: $"At most {MaxStreamsPerUser} concurrent /showings/stream connections per user.",
+                    statusCode: StatusCodes.Status429TooManyRequests);
+            }
+            using var life = CancellationTokenSource.CreateLinkedTokenSource(ct);
             try
             {
-                await foreach (var change in feed.WatchAsync(resume, ct))
+                // JWTs carry exp (unix seconds; MapInboundClaims is off so the claim keeps its name). PATs have no exp: cap only.
+                if (long.TryParse(http.User.FindFirst("exp")?.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var exp))
                 {
-                    if (change is null) { await http.Response.WriteAsync(": ping\n\n", ct); }
-                    else
-                    {
-                        var data = JsonSerializer.Serialize(new { showingId = change.ShowingId, status = change.Status, operation = change.Operation, listingAddress = change.ListingAddress, buyerName = change.BuyerName });
-                        await http.Response.WriteAsync($"id: {change.ResumeToken}\nevent: showing\ndata: {data}\n\n", ct);
-                    }
-                    await http.Response.Body.FlushAsync(ct);
+                    var remaining = Instant.FromUnixTimeSeconds(exp) - clock.GetCurrentInstant();
+                    if (remaining <= Duration.Zero) return Results.Problem(title: "Session expired", statusCode: StatusCodes.Status401Unauthorized);
+                    life.CancelAfter(remaining.ToTimeSpan());
                 }
+                var token = life.Token;
+                http.Response.Headers.ContentType = "text/event-stream";
+                http.Response.Headers.CacheControl = "no-cache, no-transform";
+                http.Response.Headers["X-Accel-Buffering"] = "no";
+                var resume = http.Request.Headers["Last-Event-ID"].FirstOrDefault() ?? http.Request.Query["lastEventId"].FirstOrDefault();
+                await http.Response.WriteAsync("retry: 3000\n: connected\n\n", token);
+                await http.Response.Body.FlushAsync(token);
+                try
+                {
+                    await foreach (var change in feed.WatchAsync(resume, token))
+                    {
+                        if (change is null) { await http.Response.WriteAsync(": ping\n\n", token); }
+                        else
+                        {
+                            var data = JsonSerializer.Serialize(new { showingId = change.ShowingId, status = change.Status, operation = change.Operation, listingAddress = change.ListingAddress, buyerName = change.BuyerName });
+                            await http.Response.WriteAsync($"id: {change.ResumeToken}\nevent: showing\ndata: {data}\n\n", token);
+                        }
+                        await http.Response.Body.FlushAsync(token);
+                    }
+                }
+                catch (OperationCanceledException) { /* client went away, or the token expired */ }
+                return Results.Empty;
             }
-            catch (OperationCanceledException) { /* client went away */ }
+            finally { Release(user); }
         }).ExcludeFromDescription();
 
         return app;
+    }
+
+    public const int MaxStreamsPerUser = 5;
+    /// <summary>Open /showings/stream connections per user id (process local; one API instance in the demo).</summary>
+    private static readonly ConcurrentDictionary<string, int> Streams = new();
+
+    private static void Release(string user)
+    {
+        if (Streams.AddOrUpdate(user, 0, (_, n) => n - 1) <= 0) Streams.TryRemove(new KeyValuePair<string, int>(user, 0));
     }
 }

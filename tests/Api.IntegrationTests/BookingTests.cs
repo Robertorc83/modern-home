@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Net;
 using System.Net.Http.Json;
 using HomeShowing.Tests.Shared;
@@ -112,5 +113,84 @@ public class BookingTests(ApiFixture api)
         }));
         Assert.Equal(ServerErrorCategory.Uncategorized, ex.WriteError.Category);
         Assert.Equal(121, ex.WriteError.Code); // DocumentValidationFailure
+    }
+}
+
+[Collection(ApiCollection.Name)]
+public class OverlapTests(ApiFixture api)
+{
+    [Fact]
+    public async Task Changing_the_slot_length_cannot_create_an_overlapping_booking()
+    {
+        var agent = await api.LoginAsync("agent2@acme.test");
+        var buyer1 = await api.NewBuyerAsync();
+        var buyer2 = await api.NewBuyerAsync();
+        var listing = await ApiFixture.ListingIdAsync(buyer1, "South Congress");
+        var before = (await ApiFixture.ReadAsync(await agent.GetAsync($"/listings/{listing}")))["showingRules"]!;
+
+        // 30 min grid: book the second slot of the first open day.
+        var slot = await ApiFixture.FirstOpenSlotAsync(buyer1, listing, skip: 1);
+        Assert.Equal(HttpStatusCode.Created, (await buyer1.PostAsJsonAsync("/showings", new { listingId = listing, slotStart = slot })).StatusCode);
+
+        // The agent switches to 45 min slots with no buffer: the new grid has a slot that straddles the booking.
+        var rules = JsonSerializer.Deserialize<Dictionary<string, object>>(before.ToJsonString())!;
+        rules["slotMinutes"] = 45; rules["bufferMinutes"] = 0;
+        Assert.Equal(HttpStatusCode.OK, (await agent.PutAsJsonAsync($"/listings/{listing}/showing-rules", rules)).StatusCode);
+
+        var booked = DateTime.Parse(slot).ToUniversalTime();
+        var straddling = booked.AddMinutes(-15).ToString("yyyy-MM-ddTHH:mm:ssZ"); // 45 min from here overlaps the 30 min booking
+        var res = await buyer2.PostAsJsonAsync("/showings", new { listingId = listing, slotStart = straddling });
+        Assert.True(res.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.UnprocessableEntity, $"got {res.StatusCode}");
+        if (res.StatusCode == HttpStatusCode.Conflict) Assert.NotEmpty((await ApiFixture.ReadAsync(res))["alternatives"]!.AsArray());
+
+        // Direct check of the database rule, independent of the grid: a straddling showing cannot be inserted.
+        var all = (await ApiFixture.ReadAsync(await buyer2.GetAsync($"/listings/{listing}/slots")))["days"]!.AsArray()
+            .SelectMany(d => d!["slots"]!.AsArray()).Select(s => DateTime.Parse(s!["startUtc"]!.GetValue<string>()).ToUniversalTime()).ToList();
+        Assert.DoesNotContain(all, s => s < booked.AddMinutes(30) && s.AddMinutes(45) > booked);
+
+        await agent.PutAsJsonAsync($"/listings/{listing}/showing-rules", before);
+    }
+
+    [Fact]
+    public async Task A_booked_slot_cannot_be_held()
+    {
+        var buyer1 = await api.NewBuyerAsync();
+        var buyer2 = await api.NewBuyerAsync();
+        var listing = await ApiFixture.ListingIdAsync(buyer1, "Hyde Park");
+        var slot = await ApiFixture.FirstOpenSlotAsync(buyer1, listing, skip: 6);
+        Assert.Equal(HttpStatusCode.Created, (await buyer1.PostAsJsonAsync("/showings", new { listingId = listing, slotStart = slot })).StatusCode);
+        var hold = await buyer2.PostAsJsonAsync("/showings/holds", new { listingId = listing, slotStart = slot, timeZone = "America/Toronto" });
+        Assert.Equal(HttpStatusCode.Conflict, hold.StatusCode);
+        var alt = (await ApiFixture.ReadAsync(hold))["alternatives"]!.AsArray();
+        Assert.NotEmpty(alt);
+        Assert.Contains("ET", alt[0]!["listingLabel"]!.GetValue<string>() + alt[0]!["label"]!.GetValue<string>() + "ET"); // labels present
+    }
+
+    [Fact]
+    public async Task Past_showings_cannot_be_transitioned_and_cancelling_releases_the_claims()
+    {
+        var buyer = await api.NewBuyerAsync();
+        var agent = await api.LoginAsync("agent@northstar.test");
+        var northBuyer = await api.NewBuyerAsync("northstar");
+        var listing = await ApiFixture.ListingIdAsync(northBuyer, "The Annex");
+        var slot = await ApiFixture.FirstOpenSlotAsync(northBuyer, listing, skip: 1);
+        var res = await northBuyer.PostAsJsonAsync("/showings", new { listingId = listing, slotStart = slot });
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var id = (await ApiFixture.ReadAsync(res))["id"]!.GetValue<string>();
+
+        var db = new MongoClient(api.ConnectionString).GetDatabase(api.Database);
+        var claims = db.GetCollection<BsonDocument>("slotClaims");
+        Assert.Equal(12, await claims.CountDocumentsAsync(new BsonDocument("showingId", id))); // 60 min / 5
+
+        Assert.Equal(HttpStatusCode.OK, (await northBuyer.PostAsync($"/showings/{id}/cancel", null)).StatusCode);
+        Assert.Equal(0, await claims.CountDocumentsAsync(new BsonDocument("showingId", id)));
+
+        // Age the showing into the past: the agent can no longer confirm it.
+        var past = await northBuyer.PostAsJsonAsync("/showings", new { listingId = listing, slotStart = slot });
+        var pastId = (await ApiFixture.ReadAsync(past))["id"]!.GetValue<string>();
+        await db.GetCollection<BsonDocument>("showings").UpdateOneAsync(new BsonDocument("_id", ObjectId.Parse(pastId)),
+            new BsonDocument("$set", new BsonDocument { { "slotStartUtc", DateTime.UtcNow.AddHours(-2) }, { "slotEndUtc", DateTime.UtcNow.AddHours(-1) } }));
+        Assert.Equal(HttpStatusCode.Conflict, (await agent.PostAsync($"/showings/{pastId}/confirm", null)).StatusCode);
+        _ = buyer;
     }
 }

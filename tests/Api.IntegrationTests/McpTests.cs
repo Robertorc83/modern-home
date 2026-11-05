@@ -102,6 +102,20 @@ public class McpTests(ApiFixture api)
     }
 
     [Fact]
+    public async Task Search_with_an_unknown_place_is_a_tool_error_not_every_listing()
+    {
+        var buyer = await api.NewBuyerAsync();
+        await using var client = await ConnectAsync(await CreateTokenAsync(buyer));
+        var r = await client.CallToolAsync("search_listings", new Dictionary<string, object?> { ["near"] = "Atlantis" });
+        Assert.True(r.IsError);
+        Assert.Contains("Unknown place 'Atlantis'", Text(r));
+        Assert.Contains("Try one of:", Text(r));
+        var bad = await client.CallToolAsync("search_listings", new Dictionary<string, object?> { ["near"] = "Denver", ["radiusKm"] = -1 });
+        Assert.True(bad.IsError);
+        Assert.Contains("radiusKm", Text(bad));
+    }
+
+    [Fact]
     public async Task Missing_or_revoked_tokens_get_401()
     {
         var anon = api.Anonymous();

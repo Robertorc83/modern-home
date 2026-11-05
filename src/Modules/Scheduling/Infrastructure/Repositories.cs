@@ -21,16 +21,30 @@ public sealed class ShowingRepository(MongoDb db, ITenantContext tenant, MongoSe
         return list.ToLookup(s => s.ListingId, s => new Interval(s.SlotStartUtc, s.SlotEndUtc));
     }
 
-    public Task<List<Showing>> ForBuyerAsync(string buyerId, CancellationToken ct) =>
-        FindAsync(F.Eq(x => x.BuyerId, buyerId), Builders<Showing>.Sort.Ascending(x => x.SlotStartUtc), 500, ct);
+    /// <param name="since">When given, only showings that end at or after this instant, plus anything still Requested,
+    /// so the 500 row cap is spent on current showings rather than the oldest history.</param>
+    public Task<List<Showing>> ForBuyerAsync(string buyerId, CancellationToken ct, Instant? since = null) =>
+        FindAsync(WithSince(F.Eq(x => x.BuyerId, buyerId), since), Builders<Showing>.Sort.Ascending(x => x.SlotStartUtc), 500, ct);
 
-    public Task<List<Showing>> ForAgentAsync(string? agentId, ShowingStatus? status, CancellationToken ct)
+    /// <inheritdoc cref="ForBuyerAsync"/>
+    public Task<List<Showing>> ForAgentAsync(string? agentId, ShowingStatus? status, CancellationToken ct, Instant? since = null)
     {
         var filters = new List<FilterDefinition<Showing>>();
         if (agentId is not null) filters.Add(F.Eq(x => x.AgentId, agentId));
         if (status is not null) filters.Add(F.Eq(x => x.Status, status));
-        return FindAsync(filters.Count > 0 ? F.And(filters) : null, Builders<Showing>.Sort.Ascending(x => x.SlotStartUtc), 500, ct);
+        return FindAsync(WithSince(filters.Count > 0 ? F.And(filters) : null, since), Builders<Showing>.Sort.Ascending(x => x.SlotStartUtc), 500, ct);
     }
+
+    private static FilterDefinition<Showing>? WithSince(FilterDefinition<Showing>? filter, Instant? since)
+    {
+        if (since is not { } s) return filter;
+        var recent = F.Or(F.Gte(x => x.SlotEndUtc, s), F.Eq(x => x.Status, ShowingStatus.Requested));
+        return filter is null ? recent : F.And(filter, recent);
+    }
+
+    /// <summary>Any active showing on the listing that overlaps [start, end).</summary>
+    public Task<Showing?> ActiveOverlappingAsync(string listingId, Instant start, Instant end, CancellationToken ct) =>
+        FindOneAsync(F.And(F.Eq(x => x.ListingId, listingId), F.Exists(x => x.ActiveSlotKey), F.Lt(x => x.SlotStartUtc, end), F.Gt(x => x.SlotEndUtc, start)), ct);
 
     public Task<List<Showing>> ForListingAsync(string listingId, Instant from, CancellationToken ct) =>
         FindAsync(F.And(F.Eq(x => x.ListingId, listingId), F.Gte(x => x.SlotEndUtc, from)), Builders<Showing>.Sort.Ascending(x => x.SlotStartUtc), 500, ct);
@@ -43,6 +57,24 @@ public sealed class ShowingRepository(MongoDb db, ITenantContext tenant, MongoSe
         if (to is ShowingStatus.Declined or ShowingStatus.Cancelled) update = update.Unset(x => x.ActiveSlotKey);
         return FindOneAndUpdateAsync(F.And(F.Eq(x => x.Id, id), F.In(x => x.Status, from)), update, ct)!;
     }
+}
+
+public sealed class SlotClaimRepository(MongoDb db, ITenantContext tenant, MongoSessionScope session)
+    : TenantScopedRepository<SlotClaim>(db, tenant, session, CollectionName)
+{
+    public const string CollectionName = "slotClaims";
+
+    /// <summary>Inserts every bucket of the showing; a duplicate key means an overlapping active showing exists.</summary>
+    public async Task ClaimAsync(Showing s, CancellationToken ct)
+    {
+        foreach (var b in SlotClaim.Buckets(s.SlotStartUtc, s.SlotEndUtc))
+            await InsertAsync(new SlotClaim { ListingId = s.ListingId, ShowingId = s.Id, BucketStartUtc = b }, ct);
+    }
+
+    public Task ReleaseAsync(string showingId, CancellationToken ct) =>
+        session.InTransaction
+            ? Collection.DeleteManyAsync(session.Current!, Scoped(F.Eq(x => x.ShowingId, showingId)), cancellationToken: ct)
+            : Collection.DeleteManyAsync(Scoped(F.Eq(x => x.ShowingId, showingId)), ct);
 }
 
 public sealed class SlotHoldRepository(MongoDb db, ITenantContext tenant, MongoSessionScope session)
@@ -118,6 +150,14 @@ public sealed class SchedulingSchema : IMongoSchemaSetup
             new CreateIndexModel<Showing>(k.Ascending(x => x.TenantId).Ascending(x => x.AgentId).Ascending(x => x.SlotStartUtc)),
             new CreateIndexModel<Showing>(k.Ascending(x => x.TenantId).Ascending(x => x.BuyerId).Ascending(x => x.SlotStartUtc)),
             new CreateIndexModel<Showing>(k.Ascending(x => x.TenantId).Ascending(x => x.ListingId).Ascending(x => x.SlotStartUtc)),
+        ], ct);
+
+        await MongoSchema.EnsureCollectionAsync(db.Database, SlotClaimRepository.CollectionName, null, ct);
+        var claims = db.Collection<SlotClaim>(SlotClaimRepository.CollectionName);
+        await claims.Indexes.CreateManyAsync([
+            new CreateIndexModel<SlotClaim>(Builders<SlotClaim>.IndexKeys.Ascending(x => x.TenantId).Ascending(x => x.ListingId).Ascending(x => x.BucketStartUtc),
+                new CreateIndexOptions { Name = "ux_tenant_listing_bucket", Unique = true }),
+            new CreateIndexModel<SlotClaim>(Builders<SlotClaim>.IndexKeys.Ascending(x => x.TenantId).Ascending(x => x.ShowingId)),
         ], ct);
 
         await MongoSchema.EnsureCollectionAsync(db.Database, SlotHoldRepository.CollectionName, null, ct);

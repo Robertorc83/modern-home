@@ -17,6 +17,9 @@ public static class ServiceCollectionExtensions
         var mongo = new MongoOptions();
         config.GetSection("Mongo").Bind(mongo);
         services.AddSingleton(mongo);
+        var aws = new Aws.AwsOptions();
+        config.GetSection("Aws").Bind(aws);
+        services.AddSingleton(aws);
         services.AddSingleton<MongoDb>();
         services.TryAddSingleton<IClock>(SystemClock.Instance);
         services.AddScoped<MongoSessionScope>();

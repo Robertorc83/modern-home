@@ -14,13 +14,42 @@ internal sealed class ListingRepository(MongoDb db, ITenantContext tenant, Mongo
     public const string CollectionName = "listings";
 
     public Task AddAsync(Listing l, CancellationToken ct) => InsertAsync(l, ct);
-    public Task<bool> SaveAsync(Listing l, CancellationToken ct) => ReplaceAsync(l, ct);
 
-    public async Task<List<(Listing Listing, double? DistanceKm)>> SearchAsync(ListingQuery q, string? ownerId, GeoPoint? near, CancellationToken ct)
+    /// <summary>Optimistic concurrency: the replace only matches the version that was read, and bumps it.
+    /// Returns false when another writer got there first (the caller's copy is left at the version it read).</summary>
+    public async Task<bool> SaveAsync(Listing l, CancellationToken ct)
+    {
+        var expected = l.Version;
+        var stillExpected = F.Eq(x => x.Version, expected);
+        if (expected == 0) stillExpected = F.Or(stillExpected, F.Exists(x => x.Version, false)); // documents written before versioning
+        l.Version = expected + 1;
+        if (await ReplaceAsync(l, ct, stillExpected)) return true;
+        l.Version = expected;
+        return false;
+    }
+
+    /// <summary>Listings per owner in the tenant (admin agent list).</summary>
+    public async Task<Dictionary<string, int>> CountByOwnerAsync(CancellationToken ct)
+    {
+        var serializer = BsonSerializer.LookupSerializer<Listing>();
+        var match = Scoped().Render(new RenderArgs<Listing>(serializer, BsonSerializer.SerializerRegistry));
+        var pipeline = new[]
+        {
+            new BsonDocument("$match", match),
+            new BsonDocument("$group", new BsonDocument { { "_id", "$ownerUserId" }, { "count", new BsonDocument("$sum", 1) } }),
+        };
+        var rows = await Collection.Aggregate<BsonDocument>(pipeline, cancellationToken: ct).ToListAsync(ct);
+        return rows.ToDictionary(r => r["_id"].AsString, r => r["count"].ToInt32());
+    }
+
+    /// <param name="ownerId">Only this owner's listings.</param>
+    /// <param name="activeOrOwnedBy">Active listings plus this owner's own (an agent browsing the brokerage).</param>
+    public async Task<List<(Listing Listing, double? DistanceKm)>> SearchAsync(ListingQuery q, string? ownerId, GeoPoint? near, CancellationToken ct, string? activeOrOwnedBy = null)
     {
         var filters = new List<FilterDefinition<Listing>>();
         if (ownerId is not null) filters.Add(F.Eq(x => x.OwnerUserId, ownerId));
         if (q.ActiveOnly) filters.Add(F.Eq(x => x.Status, ListingStatus.Active));
+        else if (activeOrOwnedBy is not null) filters.Add(F.Or(F.Eq(x => x.Status, ListingStatus.Active), F.Eq(x => x.OwnerUserId, activeOrOwnedBy)));
         if (!string.IsNullOrWhiteSpace(q.City)) filters.Add(F.Regex(x => x.City, new BsonRegularExpression($"^{System.Text.RegularExpressions.Regex.Escape(q.City.Trim())}$", "i")));
         if (q.MaxPrice is { } max) filters.Add(F.Lte(x => x.Price, max));
         if (q.MinBeds is { } beds) filters.Add(F.Gte(x => x.Beds, beds));

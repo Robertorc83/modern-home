@@ -31,8 +31,12 @@ public sealed class LogEmailSender(ILogger<LogEmailSender> log) : IEmailSender
 /// <item><b>Queued</b> (AWS): <see cref="RelayNextAsync"/> publishes claimed rows to SQS, and <see cref="DeliverAsync"/>
 /// is called by the queue consumer.</item>
 /// </list>
-/// Delivery is idempotent: <c>sentEmails</c> has a unique index on the outbox id, so a retry after a crash
-/// (or a duplicate SQS delivery) never sends twice. Failures back off exponentially up to <see cref="MaxAttempts"/>;
+/// Delivery is at least once with a dedup record: <c>sentEmails</c> has a unique index on the outbox id and is checked
+/// before sending, so a retry after a crash (or a duplicate SQS delivery) normally skips the send. The dedup record is
+/// written only after the provider accepts the email, so a crash in the window between the send and that insert
+/// (or a provider timeout whose email was still delivered) can produce a duplicate on retry. True exactly once would
+/// need an idempotency key the email provider honours; SES does not offer one.
+/// Failures back off exponentially up to <see cref="MaxAttempts"/>;
 /// a row that gives up keeps its last error, visible on the admin "Outbox and emails" page.
 /// </summary>
 public sealed class OutboxProcessor(MongoDb db, IEmailSender sender, IClock clock, ILogger<OutboxProcessor> log, bool direct = true) : BackgroundService

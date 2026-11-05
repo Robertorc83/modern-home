@@ -14,7 +14,8 @@ public interface IDomainEventHandler<in TEvent> where TEvent : IDomainEvent
 
 public interface IDomainEventDispatcher
 {
-    Task DispatchAsync<TEvent>(TEvent domainEvent, CancellationToken ct) where TEvent : IDomainEvent;
+    /// <summary>Dispatches to the handlers of the event's runtime type (so an event held as <see cref="IDomainEvent"/> still reaches them).</summary>
+    Task DispatchAsync(IDomainEvent domainEvent, CancellationToken ct);
 }
 
 /// <summary>
@@ -24,9 +25,11 @@ public interface IDomainEventDispatcher
 /// </summary>
 public sealed class DomainEventDispatcher(IServiceProvider services) : IDomainEventDispatcher
 {
-    public async Task DispatchAsync<TEvent>(TEvent domainEvent, CancellationToken ct) where TEvent : IDomainEvent
+    public async Task DispatchAsync(IDomainEvent domainEvent, CancellationToken ct)
     {
-        foreach (var handler in services.GetServices<IDomainEventHandler<TEvent>>())
-            await handler.HandleAsync(domainEvent, ct);
+        var handlerType = typeof(IDomainEventHandler<>).MakeGenericType(domainEvent.GetType());
+        var handle = handlerType.GetMethod(nameof(IDomainEventHandler<IDomainEvent>.HandleAsync))!;
+        foreach (var handler in services.GetServices(handlerType))
+            await (Task)handle.Invoke(handler!, [domainEvent, ct])!;
     }
 }

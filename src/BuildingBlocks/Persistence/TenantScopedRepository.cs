@@ -61,10 +61,12 @@ public abstract class TenantScopedRepository<T>(MongoDb db, ITenantContext tenan
         return S is { } s ? Collection.InsertOneAsync(s, doc, cancellationToken: ct) : Collection.InsertOneAsync(doc, cancellationToken: ct);
     }
 
-    protected async Task<bool> ReplaceAsync(T doc, CancellationToken ct)
+    /// <summary>Replaces the document by id, optionally only when <paramref name="condition"/> still holds (optimistic concurrency).</summary>
+    protected async Task<bool> ReplaceAsync(T doc, CancellationToken ct, FilterDefinition<T>? condition = null)
     {
         doc.TenantId = tenant.TenantId;
-        var filter = Scoped(F.Eq(x => x.Id, doc.Id));
+        var byId = F.Eq(x => x.Id, doc.Id);
+        var filter = Scoped(condition is null ? byId : F.And(byId, condition));
         var r = S is { } s ? await Collection.ReplaceOneAsync(s, filter, doc, cancellationToken: ct) : await Collection.ReplaceOneAsync(filter, doc, cancellationToken: ct);
         return r.MatchedCount == 1;
     }

@@ -64,6 +64,7 @@ public sealed class AvailabilityService(
             Near = req.Near, NearLat = req.NearLat, NearLng = req.NearLng, RadiusKm = req.RadiusKm,
             Ids = req.ListingId is null ? null : [req.ListingId],
         };
+        if (GeoValidation.Validate(query) is { } geoProblem) return Error.Validation(geoProblem);
         if (!string.IsNullOrWhiteSpace(req.Near) && req.NearLat is null && !Listings.Domain.Places.TryResolve(req.Near, out _))
             return Error.Validation($"Unknown place '{req.Near}'. Try: {string.Join(", ", Listings.Domain.Places.Names.Take(10))}.");
 

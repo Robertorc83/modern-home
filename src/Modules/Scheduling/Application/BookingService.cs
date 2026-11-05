@@ -15,7 +15,7 @@ namespace HomeShowing.Scheduling.Application;
 
 /// <summary>Holds, bookings and the showing lifecycle. Shared by REST and MCP, so both get the same rules.</summary>
 public sealed class BookingService(
-    IListingCatalog listings, AvailabilityService availability, ShowingRepository showings, SlotHoldRepository holds,
+    IListingCatalog listings, AvailabilityService availability, ShowingRepository showings, SlotHoldRepository holds, SlotClaimRepository claims,
     IUnitOfWork uow, IDomainEventDispatcher events, IAuditLog audit, IClock clock, ITenantContext tenant)
 {
     public static readonly Duration HoldDuration = Duration.FromMinutes(5);
@@ -33,12 +33,14 @@ public sealed class BookingService(
         return true;
     }
 
-    public async Task<Result<HoldView>> HoldAsync(string listingId, string slotStart, CancellationToken ct)
+    public async Task<Result<HoldView>> HoldAsync(string listingId, string slotStart, string? viewerZone, CancellationToken ct)
     {
         if (!tenant.IsInRole(Roles.Buyer)) return Error.Forbidden("Only buyers hold slots.");
         var (listing, slot, err) = await ResolveSlotAsync(listingId, slotStart, ct);
         if (err is not null) return err;
-        var key = Showing.SlotKey(listing!.Id, slot.Start);
+        if (await showings.ActiveOverlappingAsync(listing!.Id, slot.Start, slot.End, ct) is not null)
+            return await ConflictAsync(listing, slot, "That slot was just booked.", viewerZone, ct);
+        var key = Showing.SlotKey(listing.Id, slot.Start);
         var now = clock.GetCurrentInstant();
         var hold = new SlotHold { ListingId = listing.Id, ActiveSlotKey = key, BuyerId = tenant.UserId, SlotStartUtc = slot.Start, SlotEndUtc = slot.End, ExpiresAt = now + HoldDuration };
 
@@ -60,10 +62,10 @@ public sealed class BookingService(
                     return new HoldView(extended.Id, extended.ListingId, extended.SlotStartUtc, extended.ExpiresAt);
                 }
                 if (existing.ExpiresAt <= now) { await holds.DeleteExpiredAsync(key, now, ct); continue; } // TTL monitor lags ~60 s
-                return await ConflictAsync(listing, slot, "Another buyer is confirming this slot right now.", null, ct);
+                return await ConflictAsync(listing, slot, "Another buyer is confirming this slot right now.", viewerZone, ct);
             }
         }
-        return await ConflictAsync(listing, slot, "That slot is being held by another buyer.", null, ct);
+        return await ConflictAsync(listing, slot, "That slot is being held by another buyer.", viewerZone, ct);
     }
 
     public async Task<Result<bool>> ReleaseHoldAsync(string holdId, CancellationToken ct) =>
@@ -94,7 +96,8 @@ public sealed class BookingService(
                     Status = listing.ShowingRules.AutoConfirm ? ShowingStatus.Confirmed : ShowingStatus.Requested,
                     ActiveSlotKey = key, CreatedAt = now, UpdatedAt = now, Source = req.Source ?? "web",
                 };
-                await showings.AddAsync(s, token); // the unique partial index decides who wins
+                await showings.AddAsync(s, token); // the unique partial index decides who wins for the same start
+                await claims.ClaimAsync(s, token);  // and the per bucket claims reject any overlap, even across grid changes
                 await events.DispatchAsync(new ShowingRequested(s.TenantId, Snapshot(s), listing.ShowingRules.AutoConfirm), token);
                 await audit.RecordAsync("showing.requested", s.Id, token);
                 return s;
@@ -119,13 +122,13 @@ public sealed class BookingService(
             s => s.BuyerId == tenant.UserId || AgentCan(s), s => new ShowingCancelled(s.TenantId, Snapshot(s), tenant.Role), ct);
 
     public async Task<IReadOnlyList<ShowingView>> MineAsync(CancellationToken ct) =>
-        (await showings.ForBuyerAsync(tenant.UserId, ct)).Select(SlotFormat.View).ToList();
+        (await showings.ForBuyerAsync(tenant.UserId, ct, since: clock.GetCurrentInstant() - Duration.FromDays(7))).Select(SlotFormat.View).ToList();
 
     public async Task<Result<IReadOnlyList<ShowingView>>> InboxAsync(ShowingStatus? status, CancellationToken ct)
     {
         string? agentId = tenant.IsInRole(Roles.Agent) ? tenant.UserId : tenant.IsInRole(Roles.BrokerageAdmin) ? null : "";
         if (agentId == "") return Error.Forbidden("Only agents and admins have an inbox.");
-        return (await showings.ForAgentAsync(agentId, status, ct)).Select(SlotFormat.View).ToList();
+        return (await showings.ForAgentAsync(agentId, status, ct, since: clock.GetCurrentInstant() - Duration.FromDays(7))).Select(SlotFormat.View).ToList();
     }
 
     public async Task<Result<IReadOnlyList<ShowingView>>> ForListingAsync(string listingId, CancellationToken ct)
@@ -146,25 +149,19 @@ public sealed class BookingService(
         // A buyer must not learn about other buyers' showings: not-yours looks like not-found.
         if (!allowed(current)) return tenant.IsInRole(Roles.Buyer) ? Error.NotFound("Showing") : Error.Forbidden("This showing is not on your listing.");
         if (!from.Contains(current.Status)) return Error.Conflict($"Showing is already {current.Status}.");
+        if (current.SlotEndUtc <= clock.GetCurrentInstant()) return Error.Conflict("That showing is in the past.");
 
         var updated = await uow.ExecuteAsync(async token =>
         {
             var s = await showings.TransitionAsync(id, from, to, clock.GetCurrentInstant(), token);
             if (s is null) return null;
-            await DispatchAsync(evt(s), token);
+            if (!s.IsActive) await claims.ReleaseAsync(s.Id, token); // frees the buckets for the next buyer
+            await events.DispatchAsync(evt(s), token);
             await audit.RecordAsync($"showing.{to.ToString().ToLowerInvariant()}", s.Id, token);
             return s;
         }, ct);
         return updated is null ? Error.Conflict("Showing changed while you were looking at it. Refresh and try again.") : SlotFormat.View(updated);
     }
-
-    private Task DispatchAsync(IDomainEvent e, CancellationToken ct) => e switch
-    {
-        ShowingConfirmed c => events.DispatchAsync(c, ct),
-        ShowingDeclined d => events.DispatchAsync(d, ct),
-        ShowingCancelled x => events.DispatchAsync(x, ct),
-        _ => Task.CompletedTask,
-    };
 
     private async Task<(ListingDto? Listing, Slot Slot, Error? Error)> ResolveSlotAsync(string listingId, string slotStart, CancellationToken ct)
     {

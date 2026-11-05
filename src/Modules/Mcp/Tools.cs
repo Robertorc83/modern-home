@@ -32,7 +32,10 @@ public sealed class BuyerTools
         [Description("Search radius in km when 'near' is set (default 25)")] double? radiusKm = null,
         CancellationToken ct = default)
     {
-        var hits = await catalog.SearchAsync(new ListingQuery { ActiveOnly = true, City = city, MaxPrice = maxPrice, MinBeds = minBeds, PropertyType = propertyType, Near = near, RadiusKm = radiusKm }, ct);
+        // Same validation as GET /listings: an unknown place or a bad radius is a tool error, not "no results".
+        var r = await catalog.ListAsync(new ListingQuery { ActiveOnly = true, City = city, MaxPrice = maxPrice, MinBeds = minBeds, PropertyType = propertyType, Near = near, RadiusKm = radiusKm }, ct);
+        if (!r.IsSuccess) throw new McpException(r.Error!.Detail ?? r.Error.Title);
+        var hits = r.Value;
         if (hits.Count == 0) return "No active listings match those filters.";
         var sb = new StringBuilder($"{hits.Count} listing(s):\n");
         foreach (var h in hits) sb.AppendLine("- " + Format.Listing(h.Listing, h.DistanceKm));
@@ -172,7 +175,7 @@ public sealed class AgentTools
 
     [McpServerTool(Name = "get_listing_schedule", Title = "Get a listing's schedule", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description("Show the agent's listings, or for one listing its showing rules, booked showings and next open slots (in the listing's time zone).")]
-    public static async Task<string> GetListingSchedule(ListingService listings, BookingService booking, AvailabilityService availability, ITenantContext tenant,
+    public static async Task<string> GetListingSchedule(IListingCatalog listings, BookingService booking, AvailabilityService availability, ITenantContext tenant,
         [Description("Listing id; omit to list your listings")] string? listingId = null, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(listingId))

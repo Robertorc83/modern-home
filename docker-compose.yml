@@ -38,6 +38,9 @@ services:
       ASPNETCORE_HTTP_PORTS: "8080"
       Mongo__ConnectionString: mongodb://mongo:27017/?replicaSet=rs0&directConnection=true
       Auth__SigningKey: ${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-0123456789abcdef}
+      # Demo only: lets the API start with the public dev key above. Real deployments must set JWT_SIGNING_KEY
+      # (the API refuses the dev key outside Development unless this flag is set).
+      Auth__AllowDevKey: "true"
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       Seed__Enabled: "true"
       Aws__Enabled: "true"

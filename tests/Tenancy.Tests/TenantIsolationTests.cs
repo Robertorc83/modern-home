@@ -49,9 +49,12 @@ public class TenantIsolationTests(ApiFixture api)
         var northInbox = (await ApiFixture.ReadAsync(await northAdmin.GetAsync("/showings/inbox"))).AsArray();
         Assert.All(northInbox, s => Assert.DoesNotContain(s!["id"]!.GetValue<string>(), acmeShowingIds));
 
-        // Geo search and matching are tenant scoped too: Denver is 2,000 km from Toronto, but the radius is not what hides it.
+        // Geo search and matching are tenant scoped too: the Acme Denver listings sit inside this radius (an Acme buyer gets
+        // them with the same query), so it is the tenant filter inside $geoNear, not the distance, that hides them.
         var northBuyer = await api.LoginAsync("buyer@northstar.test");
-        var near = (await ApiFixture.ReadAsync(await northBuyer.GetAsync("/listings?near=Denver&radiusKm=20000"))).AsArray();
+        var acmeBuyer = await api.LoginAsync("buyer@acme.test");
+        Assert.NotEmpty((await ApiFixture.ReadAsync(await acmeBuyer.GetAsync("/listings?near=Denver&radiusKm=500"))).AsArray());
+        var near = (await ApiFixture.ReadAsync(await northBuyer.GetAsync("/listings?near=Denver&radiusKm=500"))).AsArray();
         Assert.All(near, l => Assert.DoesNotContain(l!["id"]!.GetValue<string>(), acmeIds));
         var match = await ApiFixture.ReadAsync(await northBuyer.PostAsJsonAsync("/match", new
         {

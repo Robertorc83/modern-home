@@ -6,6 +6,7 @@ using HomeShowing.BuildingBlocks.Results;
 using HomeShowing.BuildingBlocks.Tenancy;
 using HomeShowing.Identity.Domain;
 using HomeShowing.Identity.Infrastructure;
+using HomeShowing.Listings.Application;
 using HomeShowing.Tenancy;
 using Microsoft.IdentityModel.Tokens;
 using NodaTime;
@@ -16,9 +17,12 @@ public sealed class JwtOptions
 {
     public string Issuer { get; set; } = "home-showing-scheduler";
     public string Audience { get; set; } = "home-showing-scheduler";
-    /// <summary>HMAC key, at least 32 bytes. Overridden by Auth__JwtSigningKey in every real environment.</summary>
-    public string SigningKey { get; set; } = "dev-only-signing-key-change-me-0123456789abcdef";
+    /// <summary>The checked in development key. Refused outside Development unless Auth:AllowDevKey is true.</summary>
+    public const string DevSigningKey = "dev-only-signing-key-change-me-0123456789abcdef";
+    /// <summary>HMAC key, at least 32 bytes. Overridden by Auth__SigningKey in every real environment.</summary>
+    public string SigningKey { get; set; } = DevSigningKey;
     public int LifetimeHours { get; set; } = 12;
+    public bool IsDevKey => SigningKey == DevSigningKey;
 }
 
 public static class AppClaims
@@ -36,7 +40,7 @@ public sealed record AuthResponse(string Token, UserView User);
 public sealed record LoginRequest(string Email, string Password);
 public sealed record RegisterBuyerRequest(string TenantSlug, string Email, string Password, string Name, string? TimeZone = null);
 public sealed record CreateAgentRequest(string Name, string Email, string Password);
-public sealed record AgentView(string Id, string Name, string Email, string TimeZone);
+public sealed record AgentView(string Id, string Name, string Email, string TimeZone, int ListingCount = 0);
 public sealed record TokenView(string Id, string Name, string Prefix, Instant CreatedAt, Instant? LastUsedAt, Instant? RevokedAt);
 public sealed record CreatedToken(string Id, string Name, string Token);
 public sealed record CreateTokenRequest(string Name);
@@ -68,16 +72,22 @@ public static class PatFormat
 
 public sealed class AuthService(
     CredentialStore credentials, UserRepository users, TokenRepository tokens, ITenantDirectory tenants,
-    JwtIssuer jwt, IClock clock, ITenantContext tenant)
+    IListingCatalog listings, JwtIssuer jwt, IClock clock, ITenantContext tenant)
 {
     // A fixed hash to compare against when the email is unknown, so timing does not reveal which emails exist.
     private static readonly string DummyHash = BCrypt.Net.BCrypt.HashPassword("not-a-real-password", 11);
 
     public async Task<Result<AuthResponse>> LoginAsync(LoginRequest req, CancellationToken ct)
     {
-        var user = await credentials.FindForLoginAsync(req.Email ?? "", ct);
-        var ok = BCrypt.Net.BCrypt.Verify(req.Password ?? "", user?.PasswordHash ?? DummyHash);
-        if (user is null || !ok) return Error.Unauthorized("Email or password is incorrect.");
+        // Emails are unique per brokerage, so the same address may exist in several tenants (with their own passwords).
+        // Login has no tenant yet: verify the password against each candidate and sign in the first that matches.
+        var candidates = await credentials.FindForLoginAsync(req.Email ?? "", ct);
+        var password = req.Password ?? "";
+        User? user = null;
+        foreach (var c in candidates)
+            if (BCrypt.Net.BCrypt.Verify(password, c.PasswordHash)) { user = c; break; }
+        if (candidates.Count == 0) BCrypt.Net.BCrypt.Verify(password, DummyHash); // keep unknown emails as slow as known ones
+        if (user is null) return Error.Unauthorized("Email or password is incorrect.");
         return await RespondAsync(user, ct);
     }
 
@@ -101,8 +111,12 @@ public sealed class AuthService(
         return u is null ? Error.Unauthorized("User no longer exists.") : await ViewAsync(u, ct);
     }
 
-    public async Task<IReadOnlyList<AgentView>> ListAgentsAsync(CancellationToken ct) =>
-        (await users.ByRoleAsync(Roles.Agent, ct)).Select(u => new AgentView(u.Id, u.Name, u.Email, u.TimeZone)).ToList();
+    public async Task<IReadOnlyList<AgentView>> ListAgentsAsync(CancellationToken ct)
+    {
+        var agents = await users.ByRoleAsync(Roles.Agent, ct);
+        var counts = await listings.CountByOwnerAsync(ct);
+        return agents.Select(u => new AgentView(u.Id, u.Name, u.Email, u.TimeZone, counts.GetValueOrDefault(u.Id))).ToList();
+    }
 
     public async Task<Result<AgentView>> CreateAgentAsync(CreateAgentRequest req, CancellationToken ct)
     {

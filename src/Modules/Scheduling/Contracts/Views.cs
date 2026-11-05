@@ -39,7 +39,7 @@ public sealed record ShowingView(
 public sealed record HoldView(string Id, string ListingId, Instant SlotStartUtc, Instant ExpiresAt);
 
 public sealed record BookRequest(string ListingId, string SlotStart, string? Source = null, string? TimeZone = null);
-public sealed record HoldRequest(string ListingId, string SlotStart);
+public sealed record HoldRequest(string ListingId, string SlotStart, string? TimeZone = null);
 
 public static class SlotFormat
 {

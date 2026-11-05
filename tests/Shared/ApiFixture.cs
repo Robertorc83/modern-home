@@ -32,6 +32,7 @@ public sealed class ApiFixture : IAsyncLifetime
             .UseSetting("Mongo:Database", Database)
             .UseSetting("Seed:Enabled", "true")
             .UseSetting("RateLimits:AuthPerMinute", "10000")
+            .UseSetting("Auth:AllowDevKey", "true") // the test host is not necessarily "Development"
             .UseSetting("ANTHROPIC_API_KEY", ""));
         _ = Factory.Server; // start the host: applies schema and seeds
     }

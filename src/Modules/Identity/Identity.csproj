@@ -8,6 +8,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\BuildingBlocks\BuildingBlocks.csproj" />
     <ProjectReference Include="..\Tenancy\Tenancy.csproj" />
+    <!-- Contracts only (IListingCatalog) for the admin agent list's listing counts. Listings never references Identity. -->
+    <ProjectReference Include="..\Listings\Listings.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="BCrypt.Net-Next" Version="4.2.1" />
