@@ -15,7 +15,7 @@ JWT claims: `sub` (user id), `tenantId`, `role` (`BrokerageAdmin` | `Agent` | `B
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| POST | `/auth/login` | `{ email, password }` | `{ token, user }` |
+| POST | `/auth/login` | `{ email, password, tenantSlug? }` | `{ token, user }`. The same email may exist in several brokerages: when the password matches more than one and no `tenantSlug` is given, 409 ProblemDetails `"That email exists in more than one brokerage; pass tenantSlug."` with `tenants: [{ slug, name }]`; repeat with `tenantSlug`. Rate limited per client IP (60/min) and per email (10/min) → 429 |
 | POST | `/auth/register-buyer` | `{ tenantSlug, email, password, name }` | `{ token, user }` (409 if email exists) |
 | GET | `/auth/me` | | `user` |
 | GET | `/tenants` | anonymous | `[{ slug, name, defaultTimeZone }]` |
@@ -118,6 +118,8 @@ Response:
   "warnings": []
 }
 ```
+Rate limited per user: 20 parses a minute (shared with the MCP `find_open_slots` tool) → 429 ProblemDetails.
+
 `GET /ai/provider` → `{ provider }`
 
 ## Admin / ops

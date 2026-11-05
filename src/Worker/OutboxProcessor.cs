@@ -94,12 +94,37 @@ public sealed class OutboxProcessor(MongoDb db, IEmailSender sender, IClock cloc
         return true;
     }
 
-    /// <summary>Queued mode, consumer side. Returns true when the message can be acknowledged.</summary>
+    /// <summary>
+    /// Queued mode, consumer side. Returns true when the message can be acknowledged (delivered, or nothing to do).
+    /// The row is leased atomically before sending (ProcessedAt null and no live lock), so two consumers holding the
+    /// same SQS message (a redelivery while the first is still sending) cannot both send: the second sees the lock,
+    /// returns false and SQS redelivers later, by which time the row is processed and gets acknowledged.
+    /// What is still at least once: a send that outlives the lease (30 s) plus the SQS visibility timeout (60 s) could
+    /// let a redelivery lease the row again, and a crash between the provider accepting the email and the sentEmails
+    /// insert leaves no record of the send. Both need an idempotency key the provider honours; SES has none.
+    /// </summary>
     public async Task<bool> DeliverAsync(string outboxId, CancellationToken ct)
     {
-        var msg = await Outbox.Find(m => m.Id == outboxId).FirstOrDefaultAsync(ct);
-        if (msg is null || msg.ProcessedAt is not null) return true; // unknown or already delivered: ack
-        return await DeliverAsync(msg, ct);
+        // The relay holds the same lease while it publishes to SQS and releases it right after; the consumer can
+        // receive the message inside that window, so a locked, unpublished row is retried briefly before giving up.
+        for (var attempt = 0; ; attempt++)
+        {
+            var msg = await TryLeaseAsync(outboxId, ct);
+            if (msg is not null) return await DeliverAsync(msg, ct);
+            var current = await Outbox.Find(m => m.Id == outboxId).FirstOrDefaultAsync(ct);
+            if (current is null || current.ProcessedAt is not null) return true; // unknown or already delivered: ack
+            if (current.PublishedAt is not null || attempt >= 5) return false;    // leased by another consumer: SQS redelivers
+            await Task.Delay(TimeSpan.FromMilliseconds(200), ct);
+        }
+    }
+
+    private Task<OutboxMessage?> TryLeaseAsync(string outboxId, CancellationToken ct)
+    {
+        var now = clock.GetCurrentInstant();
+        var f = Builders<OutboxMessage>.Filter;
+        var free = f.And(f.Eq(m => m.Id, outboxId), f.Eq(m => m.ProcessedAt, null), f.Or(f.Eq(m => m.LockedUntil, null), f.Lt(m => m.LockedUntil, now)));
+        return Outbox.FindOneAndUpdateAsync(free, Builders<OutboxMessage>.Update.Set(m => m.LockedUntil, now + Lease).Inc(m => m.Attempts, 1),
+            new FindOneAndUpdateOptions<OutboxMessage> { ReturnDocument = ReturnDocument.After }, ct)!;
     }
 
     private async Task<OutboxMessage?> ClaimAsync(CancellationToken ct, bool unpublishedOnly = false)

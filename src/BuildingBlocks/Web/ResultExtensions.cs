@@ -15,6 +15,7 @@ public static class ResultExtensions
             ErrorKind.Conflict => StatusCodes.Status409Conflict,
             ErrorKind.Unauthorized => StatusCodes.Status401Unauthorized,
             ErrorKind.Unprocessable => StatusCodes.Status422UnprocessableEntity,
+            ErrorKind.RateLimited => StatusCodes.Status429TooManyRequests,
             _ => StatusCodes.Status500InternalServerError,
         };
         return TypedResults.Problem(title: error.Title, detail: error.Detail, statusCode: status,

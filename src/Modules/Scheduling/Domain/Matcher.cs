@@ -36,12 +36,21 @@ public static class Matcher
     public static IReadOnlyList<Slot> Within(IEnumerable<Slot> slots, IReadOnlyList<Interval> ranges) =>
         slots.Where(s => ranges.Any(r => r.Start <= s.Start && s.End <= r.End)).ToList();
 
-    /// <summary>Ranks listings by the number of matching slots (ties keep the incoming order, e.g. distance).</summary>
-    public static IReadOnlyList<ListingMatch<T>> Rank<T>(IEnumerable<(T Listing, IReadOnlyList<Slot> Open)> candidates, IReadOnlyList<Interval> ranges) =>
-        candidates.Select((c, i) => (Match: new ListingMatch<T>(c.Listing, Within(c.Open, ranges)), Index: i))
-            .Where(x => x.Match.Slots.Count > 0)
-            .OrderByDescending(x => x.Match.Slots.Count).ThenBy(x => x.Index)
-            .Select(x => x.Match).ToList();
+    /// <summary>
+    /// Ranks listings with at least one matching slot. Without <paramref name="distance"/>: most matching slots first,
+    /// ties keep the incoming order. With it (a "near" search): closest first, as $geoNear returned them, and the number
+    /// of matching slots breaks ties between listings at the same distance.
+    /// </summary>
+    public static IReadOnlyList<ListingMatch<T>> Rank<T>(IEnumerable<(T Listing, IReadOnlyList<Slot> Open)> candidates, IReadOnlyList<Interval> ranges,
+        Func<T, double?>? distance = null)
+    {
+        var matched = candidates.Select((c, i) => (Match: new ListingMatch<T>(c.Listing, Within(c.Open, ranges)), Index: i))
+            .Where(x => x.Match.Slots.Count > 0);
+        var ordered = distance is null
+            ? matched.OrderByDescending(x => x.Match.Slots.Count).ThenBy(x => x.Index)
+            : matched.OrderBy(x => distance(x.Match.Listing) ?? double.MaxValue).ThenByDescending(x => x.Match.Slots.Count).ThenBy(x => x.Index);
+        return ordered.Select(x => x.Match).ToList();
+    }
 
     /// <summary>Groups slots by calendar day in the viewer's zone: 11 p.m. in Denver is already tomorrow in Toronto.</summary>
     public static IReadOnlyList<DayGroup<Slot>> GroupByDay(IEnumerable<Slot> slots, DateTimeZone viewerZone) =>

@@ -103,6 +103,34 @@ public class BookingTests(ApiFixture api)
     }
 
     [Fact]
+    public async Task Schema_setup_backfills_claims_for_active_showings_that_have_none()
+    {
+        var buyer = await api.NewBuyerAsync("northstar");
+        var listing = await ApiFixture.ListingIdAsync(buyer, "Leslieville"); // 30 min slots, no buffer
+        var slot = await ApiFixture.FirstOpenSlotAsync(buyer, listing, skip: 3);
+        var res = await buyer.PostAsJsonAsync("/showings", new { listingId = listing, slotStart = slot });
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var id = (await ApiFixture.ReadAsync(res))["id"]!.GetValue<string>();
+
+        // Simulate a database written before claims existed: the showing is active but has no claim documents.
+        var db = new MongoClient(api.ConnectionString).GetDatabase(api.Database);
+        var claims = db.GetCollection<BsonDocument>("slotClaims");
+        await claims.DeleteManyAsync(new BsonDocument("showingId", id));
+        Assert.Equal(0, await claims.CountDocumentsAsync(new BsonDocument("showingId", id)));
+
+        // Starting a host runs the schema setup (idempotent) against the same database.
+        using var host = api.Factory.WithWebHostBuilder(_ => { });
+        _ = host.Server;
+        Assert.Equal(6, await claims.CountDocumentsAsync(new BsonDocument("showingId", id))); // 30 min / 5
+
+        // The showing still behaves normally, and cancelling releases the backfilled claims like any others.
+        var other = await api.NewBuyerAsync("northstar");
+        Assert.Equal(HttpStatusCode.Conflict, (await other.PostAsJsonAsync("/showings", new { listingId = listing, slotStart = slot })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await buyer.PostAsync($"/showings/{id}/cancel", null)).StatusCode);
+        Assert.Equal(0, await claims.CountDocumentsAsync(new BsonDocument("showingId", id)));
+    }
+
+    [Fact]
     public async Task Schema_validator_rejects_a_showing_that_is_active_without_a_slot_key()
     {
         var db = new MongoClient(api.ConnectionString).GetDatabase(api.Database);
@@ -127,26 +155,35 @@ public class OverlapTests(ApiFixture api)
         var buyer2 = await api.NewBuyerAsync();
         var listing = await ApiFixture.ListingIdAsync(buyer1, "South Congress");
         var before = (await ApiFixture.ReadAsync(await agent.GetAsync($"/listings/{listing}")))["showingRules"]!;
+        Assert.Equal((30, 10), (before["slotMinutes"]!.GetValue<int>(), before["bufferMinutes"]!.GetValue<int>()));
 
-        // 30 min grid: book the second slot of the first open day.
-        var slot = await ApiFixture.FirstOpenSlotAsync(buyer1, listing, skip: 1);
+        // South Congress runs a 30 + 10 grid from windows that start on the hour (09:00, 12:00, 17:00 Central), so its
+        // slots sit at :00, :40, :20, :00 and the second slot of any day is the one at :40 (Central offsets are whole
+        // hours, so the UTC minute is the local minute). Book one of those.
+        var open = (await ApiFixture.ReadAsync(await buyer1.GetAsync($"/listings/{listing}/slots")))["days"]!.AsArray()
+            .SelectMany(d => d!["slots"]!.AsArray()).Select(s => s!["startUtc"]!.GetValue<string>()).ToList();
+        var slot = open.First(s => DateTime.Parse(s).ToUniversalTime().Minute == 40);
         Assert.Equal(HttpStatusCode.Created, (await buyer1.PostAsJsonAsync("/showings", new { listingId = listing, slotStart = slot })).StatusCode);
 
-        // The agent switches to 45 min slots with no buffer: the new grid has a slot that straddles the booking.
+        // The agent switches to 45 min slots with no buffer. The new grid (window start + k * 45) has a slot at :45 that
+        // starts 5 minutes into the :40-:10 booking: a different slot key, so only the per bucket claims can reject it.
         var rules = JsonSerializer.Deserialize<Dictionary<string, object>>(before.ToJsonString())!;
         rules["slotMinutes"] = 45; rules["bufferMinutes"] = 0;
         Assert.Equal(HttpStatusCode.OK, (await agent.PutAsJsonAsync($"/listings/{listing}/showing-rules", rules)).StatusCode);
 
         var booked = DateTime.Parse(slot).ToUniversalTime();
-        var straddling = booked.AddMinutes(-15).ToString("yyyy-MM-ddTHH:mm:ssZ"); // 45 min from here overlaps the 30 min booking
+        var straddling = booked.AddMinutes(5).ToString("yyyy-MM-ddTHH:mm:ssZ");
         var res = await buyer2.PostAsJsonAsync("/showings", new { listingId = listing, slotStart = straddling });
-        Assert.True(res.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.UnprocessableEntity, $"got {res.StatusCode}");
-        if (res.StatusCode == HttpStatusCode.Conflict) Assert.NotEmpty((await ApiFixture.ReadAsync(res))["alternatives"]!.AsArray());
+        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
+        var conflict = await ApiFixture.ReadAsync(res);
+        Assert.NotEmpty(conflict["alternatives"]!.AsArray());
+        Assert.Contains("just booked", conflict["title"]!.GetValue<string>());
 
-        // Direct check of the database rule, independent of the grid: a straddling showing cannot be inserted.
+        // And the straddling slot is not offered: no listed slot on the new grid overlaps the booking.
         var all = (await ApiFixture.ReadAsync(await buyer2.GetAsync($"/listings/{listing}/slots")))["days"]!.AsArray()
             .SelectMany(d => d!["slots"]!.AsArray()).Select(s => DateTime.Parse(s!["startUtc"]!.GetValue<string>()).ToUniversalTime()).ToList();
         Assert.DoesNotContain(all, s => s < booked.AddMinutes(30) && s.AddMinutes(45) > booked);
+        Assert.Contains(all, s => s > booked); // the rest of the grid is still bookable
 
         await agent.PutAsJsonAsync($"/listings/{listing}/showing-rules", before);
     }

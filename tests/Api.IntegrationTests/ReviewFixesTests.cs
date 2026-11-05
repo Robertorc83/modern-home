@@ -90,6 +90,8 @@ public class ReviewFixesTests(ApiFixture api)
 
         var agent = await api.LoginAsync("agent@acme.test");
         Assert.Equal(HttpStatusCode.NotFound, (await agent.GetAsync($"/listings/{id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await agent.GetAsync($"/listings/{id}/slots")).StatusCode); // slots are role aware too
+        Assert.Equal(HttpStatusCode.OK, (await agent2.GetAsync($"/listings/{id}/slots")).StatusCode);
         var visible = (await ApiFixture.ReadAsync(await agent.GetAsync("/listings"))).AsArray();
         Assert.DoesNotContain(visible, l => l!["id"]!.GetValue<string>() == id);
         Assert.Contains(visible, l => l!["status"]!.GetValue<string>() == "Active"); // the brokerage's active listings still show
@@ -120,10 +122,72 @@ public class ReviewFixesTests(ApiFixture api)
         // Same brokerage again: still a conflict.
         Assert.Equal(HttpStatusCode.Conflict, (await anon.PostAsJsonAsync("/auth/register-buyer", new { tenantSlug = "acme", email, password = "acme-pass-1", name = "Twin A" })).StatusCode);
 
+        // Different passwords: the password alone identifies the brokerage.
         var north = await ApiFixture.ReadAsync(await anon.PostAsJsonAsync("/auth/login", new { email, password = "north-pass-2" }));
         Assert.Equal("northstar", north["user"]!["tenantSlug"]!.GetValue<string>());
         var acme = await ApiFixture.ReadAsync(await anon.PostAsJsonAsync("/auth/login", new { email, password = "acme-pass-1" }));
         Assert.Equal("acme", acme["user"]!["tenantSlug"]!.GetValue<string>());
         Assert.Equal(HttpStatusCode.Unauthorized, (await anon.PostAsJsonAsync("/auth/login", new { email, password = "wrong" })).StatusCode);
+        // tenantSlug narrows the candidates: the right password for the other brokerage is not accepted.
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anon.PostAsJsonAsync("/auth/login", new { email, password = "north-pass-2", tenantSlug = "acme" })).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anon.PostAsJsonAsync("/auth/login", new { email, password = "acme-pass-1", tenantSlug = "nowhere" })).StatusCode);
+    }
+
+    [Fact]
+    public async Task Login_that_matches_more_than_one_brokerage_is_a_409_until_tenantSlug_is_passed()
+    {
+        var email = $"twin-{Guid.NewGuid():N}@test.local";
+        var anon = api.Anonymous();
+        Assert.Equal(HttpStatusCode.Created, (await anon.PostAsJsonAsync("/auth/register-buyer", new { tenantSlug = "acme", email, password = ApiFixture.Password, name = "Twin A" })).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await anon.PostAsJsonAsync("/auth/register-buyer", new { tenantSlug = "northstar", email, password = ApiFixture.Password, name = "Twin N" })).StatusCode);
+
+        var ambiguous = await anon.PostAsJsonAsync("/auth/login", new { email, password = ApiFixture.Password });
+        Assert.Equal(HttpStatusCode.Conflict, ambiguous.StatusCode);
+        var problem = await ApiFixture.ReadAsync(ambiguous);
+        Assert.Contains("pass tenantSlug", problem["title"]!.GetValue<string>());
+        var tenants = problem["tenants"]!.AsArray().Select(t => (t!["slug"]!.GetValue<string>(), t["name"]!.GetValue<string>())).OrderBy(t => t.Item1).ToList();
+        Assert.Equal([("acme", "Acme Realty"), ("northstar", "Northstar Homes")], tenants);
+
+        var acme = await ApiFixture.ReadAsync(await anon.PostAsJsonAsync("/auth/login", new { email, password = ApiFixture.Password, tenantSlug = "acme" }));
+        Assert.Equal("acme", acme["user"]!["tenantSlug"]!.GetValue<string>());
+        var north = await ApiFixture.ReadAsync(await anon.PostAsJsonAsync("/auth/login", new { email, password = ApiFixture.Password, tenantSlug = "northstar" }));
+        Assert.Equal("northstar", north["user"]!["tenantSlug"]!.GetValue<string>());
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anon.PostAsJsonAsync("/auth/login", new { email, password = "wrong", tenantSlug = "acme" })).StatusCode);
+    }
+
+    [Fact]
+    public async Task Failed_logins_are_limited_per_email_without_blocking_other_emails_from_the_same_client()
+    {
+        // The shared fixture lifts the per email limit so the other tests can sign in freely; this host lowers it again.
+        using var factory = api.Factory.WithWebHostBuilder(b => b.UseSetting("RateLimits:AuthPerEmailPerMinute", "10"));
+        var client = factory.CreateClient();
+        var email = $"bruteforce-{Guid.NewGuid():N}@test.local";
+        for (var i = 1; i <= 10; i++)
+            Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsJsonAsync("/auth/login", new { email, password = "wrong" })).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await client.PostAsJsonAsync("/auth/login", new { email, password = "wrong" })).StatusCode);
+
+        // The limiter keys on the LAST email in the body, which is the one model binding uses.
+        var duplicateKeys = "{\"email\":\"other-" + Guid.NewGuid().ToString("N") + "@test.local\",\"password\":\"wrong\",\"email\":\"" + email + "\"}";
+        var duplicate = new StringContent(duplicateKeys, System.Text.Encoding.UTF8, "application/json");
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await client.PostAsync("/auth/login", duplicate)).StatusCode);
+
+        // A different email from the same client is still within the per IP budget: a plain 401, not 429.
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsJsonAsync("/auth/login", new { email = $"someone-else-{Guid.NewGuid():N}@test.local", password = "wrong" })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync("/auth/login", new { email = "buyer@acme.test", password = ApiFixture.Password })).StatusCode);
+    }
+
+    [Fact]
+    public async Task Availability_parsing_is_limited_per_user_on_rest_and_mcp_alike()
+    {
+        // Default budget is 20 parses a minute per user, shared by POST /ai/parse-availability and the MCP find_open_slots tool.
+        var buyer = await api.NewBuyerAsync();
+        for (var i = 1; i <= 20; i++)
+            Assert.Equal(HttpStatusCode.OK, (await buyer.PostAsJsonAsync("/ai/parse-availability", new { text = "Saturday morning", timeZone = "America/Denver" })).StatusCode);
+        var limited = await buyer.PostAsJsonAsync("/ai/parse-availability", new { text = "Saturday morning", timeZone = "America/Denver" });
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
+        Assert.Equal(429, (await ApiFixture.ReadAsync(limited))["status"]!.GetValue<int>());
+
+        var other = await api.NewBuyerAsync();
+        Assert.Equal(HttpStatusCode.OK, (await other.PostAsJsonAsync("/ai/parse-availability", new { text = "Saturday morning", timeZone = "America/Denver" })).StatusCode);
     }
 }

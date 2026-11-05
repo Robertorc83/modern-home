@@ -56,6 +56,23 @@ public class MatcherTests
     }
 
     [Fact]
+    public void Near_a_place_listings_are_ranked_by_distance_with_match_count_as_the_tiebreak()
+    {
+        var three = SlotGenerator.Generate(SaturdayMorning(60), Denver, Now);  // 3 slots
+        var six = SlotGenerator.Generate(SaturdayMorning(30), Denver, Now);    // 6 slots
+        var none = SlotGenerator.Generate(new ShowingRules { HorizonDays = 7, LeadTimeHours = 0, Weekly = [new() { DayOfWeek = "Sunday", Start = "09:00", End = "10:00" }] }, Denver, Now);
+        var ranges = Matcher.ToInstants([new LocalRange(L("2026-11-07T08:00:00"), L("2026-11-07T13:00:00"))], Denver);
+        // Incoming order is the $geoNear order (closest first); distances are rounded to 0.1 km so ties happen.
+        var candidates = new[] { (Listing: ("Near3", 1.2), Open: three), (Listing: ("Near0", 1.5), Open: none), (Listing: ("Tie3", 2.0), Open: three), (Listing: ("Tie6", 2.0), Open: six), (Listing: ("Far6", 9.0), Open: six) };
+
+        var byDistance = Matcher.Rank(candidates, ranges, l => l.Item2);
+        Assert.Equal(new[] { "Near3", "Tie6", "Tie3", "Far6" }, byDistance.Select(r => r.Listing.Item1));
+
+        var byMatches = Matcher.Rank(candidates, ranges);
+        Assert.Equal(new[] { "Tie6", "Far6", "Near3", "Tie3" }, byMatches.Select(r => r.Listing.Item1));
+    }
+
+    [Fact]
     public void Slots_are_grouped_by_day_in_the_viewer_zone()
     {
         // A 10:30 p.m. Denver slot is 12:30 a.m. the next day in Toronto.

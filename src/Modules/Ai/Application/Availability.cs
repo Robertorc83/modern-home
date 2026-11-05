@@ -1,5 +1,7 @@
 using System.Globalization;
+using System.Threading.RateLimiting;
 using HomeShowing.BuildingBlocks.Results;
+using HomeShowing.BuildingBlocks.Tenancy;
 using NodaTime;
 using NodaTime.Text;
 
@@ -27,13 +29,36 @@ public interface IAvailabilityParser
     Task<ParsedAvailability> ParseAsync(string text, DateTimeZone zone, ZonedDateTime now, CancellationToken ct);
 }
 
-public sealed class AvailabilityParsingService(IAvailabilityParser parser, IClock clock)
+/// <summary>
+/// Per user budget for the parser (the Claude call is the one metered operation in the system). It lives in the
+/// service rather than on the REST endpoint so the MCP <c>find_open_slots</c> tool is covered by the same budget.
+/// In memory, sliding window; a multi instance deployment gets the budget per instance.
+/// </summary>
+public sealed class AiRateLimiter(int permitsPerMinute)
+{
+    public int PermitsPerMinute { get; } = permitsPerMinute;
+    private readonly PartitionedRateLimiter<string> _limiter = PartitionedRateLimiter.Create<string, string>(user =>
+        RateLimitPartition.GetSlidingWindowLimiter(user, _ => new SlidingWindowRateLimiterOptions
+        {
+            PermitLimit = permitsPerMinute, Window = TimeSpan.FromMinutes(1), SegmentsPerWindow = 6, QueueLimit = 0,
+        }));
+
+    public bool TryAcquire(string userId)
+    {
+        using var lease = _limiter.AttemptAcquire(userId);
+        return lease.IsAcquired;
+    }
+}
+
+public sealed class AvailabilityParsingService(IAvailabilityParser parser, IClock clock, AiRateLimiter limiter, ITenantContext tenant)
 {
     public const int HorizonDays = 14;
     public string Provider => parser.Provider;
 
     public async Task<Result<ParseResponse>> ParseAsync(ParseRequest req, CancellationToken ct)
     {
+        if (!limiter.TryAcquire(tenant.IsSet ? tenant.UserId : "anon"))
+            return Error.RateLimited($"At most {limiter.PermitsPerMinute} availability parses per minute. Try again shortly.");
         if (string.IsNullOrWhiteSpace(req.Text)) return Error.Validation("Describe when you are free, e.g. \"weekday evenings after 6, Saturday morning\".");
         if (req.Text.Length > 500) return Error.Validation("Keep it under 500 characters.");
         var zone = DateTimeZoneProviders.Tzdb.GetZoneOrNull(req.TimeZone ?? "");

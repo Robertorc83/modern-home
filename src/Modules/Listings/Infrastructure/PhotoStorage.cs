@@ -80,8 +80,11 @@ public sealed class S3PhotoStorage : IPhotoStorage
         return value;
     }
 
+    /// <summary>Exactly the key shape <see cref="CreateUpload"/> produces for this listing: a prefix check alone would
+    /// accept nested or oddly named objects under the listing's folder.</summary>
     public bool IsOwnKey(string tenantId, string listingId, string value) =>
-        value.StartsWith($"{KeyPrefix}{tenantId}/{listingId}/", StringComparison.Ordinal);
+        System.Text.RegularExpressions.Regex.IsMatch(value,
+            $"^{System.Text.RegularExpressions.Regex.Escape(KeyPrefix + tenantId + "/" + listingId + "/")}[0-9a-f]{{32}}\\.(jpg|png|webp)$");
 
     private Amazon.S3.Protocol Protocol() =>
         (_options.PublicServiceUrl ?? _options.ServiceUrl)?.StartsWith("http://") == true ? Amazon.S3.Protocol.HTTP : Amazon.S3.Protocol.HTTPS;

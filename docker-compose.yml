@@ -43,6 +43,8 @@ services:
       Auth__AllowDevKey: "true"
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       Seed__Enabled: "true"
+      # The web container proxies browser traffic; trust X-Forwarded-For from the compose network only.
+      Proxy__KnownNetworks: 172.16.0.0/12
       Aws__Enabled: "true"
       Aws__ServiceUrl: http://localstack:4566
       Aws__PublicServiceUrl: http://localhost:4566

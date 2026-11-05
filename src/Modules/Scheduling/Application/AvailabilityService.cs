@@ -34,8 +34,10 @@ public sealed class AvailabilityService(
 
     public async Task<Result<ListingSlotsView>> GetListingSlotsAsync(string listingId, string? viewerZone, Instant? from, Instant? to, CancellationToken ct)
     {
-        var listing = await listings.FindAsync(listingId, ct);
-        if (listing is null || (tenant.IsInRole(Roles.Buyer) && listing.Status != ListingStatus.Active)) return Error.NotFound("Listing");
+        // Role aware read: a buyer sees Active listings only, an agent Active ones plus their own, an admin all.
+        var found = await listings.GetAsync(listingId, ct);
+        if (!found.IsSuccess) return found.Error!;
+        var listing = found.Value;
         var listingZone = Zone(listing.TimeZone) ?? DateTimeZone.Utc;
         var viewer = Zone(viewerZone) ?? listingZone;
         var open = (await OpenSlotsAsync(listing, ct)).Where(s => (from is null || s.Start >= from) && (to is null || s.End <= to));
@@ -70,7 +72,9 @@ public sealed class AvailabilityService(
 
         var hits = await listings.SearchAsync(query, ct);
         var open = await OpenSlotsAsync(hits.Select(h => h.Listing).ToList(), ct);
-        var ranked = Matcher.Rank(hits.Select(h => (h, open[h.Listing.Id])), ranges);
+        // Near a place: closest first (the $geoNear order), matching slots as the tiebreak. Otherwise most matches first.
+        var byDistance = !string.IsNullOrWhiteSpace(req.Near) || req.NearLat is not null;
+        var ranked = Matcher.Rank(hits.Select(h => (h, open[h.Listing.Id])), ranges, byDistance ? h => h.DistanceKm : null);
 
         var results = ranked.Select(m =>
         {
@@ -82,10 +86,13 @@ public sealed class AvailabilityService(
         if (results.Count == 0)
         {
             // An empty match is still useful: the open slots closest to what the buyer asked for.
-            suggestions = hits
+            var candidates = hits
                 .Select(h => (Hit: h, Near: Matcher.Nearest(open[h.Listing.Id], ranges, 3)))
-                .Where(x => x.Near.Count > 0)
-                .OrderBy(x => x.Near.Min(s => ranges.Min(r => Matcher.Gap(s, r))))
+                .Where(x => x.Near.Count > 0);
+            var ordered = byDistance
+                ? candidates.OrderBy(x => x.Hit.DistanceKm ?? double.MaxValue).ThenBy(x => x.Near.Min(s => ranges.Min(r => Matcher.Gap(s, r))))
+                : candidates.OrderBy(x => x.Near.Min(s => ranges.Min(r => Matcher.Gap(s, r))));
+            suggestions = ordered
                 .Take(5)
                 .Select(x => new Suggestion(x.Hit.Listing, x.Hit.DistanceKm,
                     x.Near.Select(s => SlotFormat.View(s, buyerZone, Zone(x.Hit.Listing.TimeZone) ?? DateTimeZone.Utc)).ToList()))

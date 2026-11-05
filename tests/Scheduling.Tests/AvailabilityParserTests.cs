@@ -1,5 +1,6 @@
 using HomeShowing.Ai.Application;
 using HomeShowing.Ai.Infrastructure;
+using HomeShowing.BuildingBlocks.Tenancy;
 using NodaTime;
 using NodaTime.Testing;
 using NodaTime.Text;
@@ -11,7 +12,7 @@ public class AvailabilityParserTests
     private static readonly DateTimeZone Denver = DateTimeZoneProviders.Tzdb["America/Denver"];
     // Wednesday 2026-11-04 10:00 in Denver
     private static readonly Instant Now = InstantPattern.ExtendedIso.Parse("2026-11-04T17:00:00Z").Value;
-    private static readonly AvailabilityParsingService Service = new(new RuleBasedAvailabilityParser(), new FakeClock(Now));
+    private static readonly AvailabilityParsingService Service = new(new RuleBasedAvailabilityParser(), new FakeClock(Now), new AiRateLimiter(1000), new TenantContext());
 
     private static async Task<ParseResponse> Parse(string text) =>
         (await Service.ParseAsync(new ParseRequest(text, "America/Denver"), default)).Value;

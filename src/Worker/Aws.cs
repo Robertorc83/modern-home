@@ -81,10 +81,15 @@ public sealed class SqsOutboxRelay(IAmazonSQS sqs, AwsOptions options, OutboxPro
 
 public sealed record QueueEnvelope(string OutboxId, string TenantId, string Type);
 
-/// <summary>Consumes the SQS queue and delivers each outbox row. Idempotent: a message redelivered after a crash
-/// finds the <c>sentEmails</c> record (unique on outbox id) and is simply acknowledged.</summary>
+/// <summary>Consumes the SQS queue and delivers each outbox row. A redelivered message (after a crash, or a duplicate
+/// publish) finds the row processed, or leased by the worker still delivering it, and is acknowledged or retried
+/// accordingly; see <see cref="OutboxProcessor.DeliverAsync(string, CancellationToken)"/> for what remains at least once.</summary>
 public sealed class SqsConsumer(IAmazonSQS sqs, AwsOptions options, OutboxProcessor outbox, ILogger<SqsConsumer> log) : BackgroundService
 {
+    /// <summary>Longer than the outbox lease (30 s), so SQS never hands the message to a second consumer while the
+    /// first one's lease is still live.</summary>
+    private const int VisibilitySeconds = 60;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         string queueUrl;
@@ -103,6 +108,7 @@ public sealed class SqsConsumer(IAmazonSQS sqs, AwsOptions options, OutboxProces
                 {
                     var env = JsonSerializer.Deserialize<QueueEnvelope>(m.Body);
                     if (env is null) { await sqs.DeleteMessageAsync(queueUrl, m.ReceiptHandle, stoppingToken); continue; }
+                    await sqs.ChangeMessageVisibilityAsync(queueUrl, m.ReceiptHandle, VisibilitySeconds, stoppingToken);
                     var done = await outbox.DeliverAsync(env.OutboxId, stoppingToken);
                     if (done) await sqs.DeleteMessageAsync(queueUrl, m.ReceiptHandle, stoppingToken);
                     // Not done: leave it; SQS redelivers after the visibility timeout and the DLQ catches repeat failures.

@@ -113,8 +113,8 @@ internal sealed class ListingSchema : IMongoSchemaSetup
             showingRules: {
               bsonType: "object", required: ["slotMinutes", "weekly"],
               properties: {
-                slotMinutes: { bsonType: "int", minimum: 10, maximum: 240 },
-                bufferMinutes: { bsonType: "int", minimum: 0 },
+                slotMinutes: { bsonType: "int", minimum: 10, maximum: 240, multipleOf: 5 },
+                bufferMinutes: { bsonType: "int", minimum: 0, maximum: 120, multipleOf: 5 },
                 weekly: { bsonType: "array" },
                 blackoutDates: { bsonType: "array", items: { bsonType: "string" } }
               }

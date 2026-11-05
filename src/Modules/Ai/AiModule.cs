@@ -27,6 +27,7 @@ public static class AiModule
         {
             services.AddSingleton<IAvailabilityParser>(sp => sp.GetRequiredService<RuleBasedAvailabilityParser>());
         }
+        services.AddSingleton(new AiRateLimiter(config.GetValue("RateLimits:AiPerMinute", 20)));
         services.AddScoped<AvailabilityParsingService>();
         return services;
     }
@@ -34,8 +35,8 @@ public static class AiModule
     public static IEndpointRouteBuilder MapAiEndpoints(this IEndpointRouteBuilder app)
     {
         var g = app.MapGroup("/ai").WithTags("AI").RequireAuthorization();
-        g.MapPost("/parse-availability", async (ParseRequest req, AvailabilityParsingService svc, CancellationToken ct) => (await svc.ParseAsync(req, ct)).ToHttp())
-            .RequireRateLimiting("ai");
+        // Rate limited per user inside the service (AiRateLimiter), so REST and MCP share one budget.
+        g.MapPost("/parse-availability", async (ParseRequest req, AvailabilityParsingService svc, CancellationToken ct) => (await svc.ParseAsync(req, ct)).ToHttp());
         g.MapGet("/provider", (IAvailabilityParser p) => TypedResults.Ok(new { provider = p.Provider }));
         return app;
     }

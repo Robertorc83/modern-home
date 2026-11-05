@@ -59,18 +59,31 @@ public sealed class DemoSeed(IServiceProvider root, ITenantDirectory tenants, Cr
         await Book(users["buyer2@acme.test"], listings["lodo"], 3, ct);
         await Book(users["buyer@acme.test"], listings["cherry-creek"], 2, ct);
         await Book(users["buyer@northstar.test"], listings["liberty"], 1, ct);
+        // One confirmed showing for Alex (agent@acme.test) so the Confirmed tab is not empty: Sam books a later
+        // Highlands slot and Alex confirms it, through the same service the inbox uses.
+        if (await Book(users["buyer2@acme.test"], listings["highlands"], 4, ct) is { } toConfirm)
+            await Confirm(users["agent@acme.test"], toConfirm, ct);
         log.LogInformation("Seeded {Tenants} brokerages, {Users} users, {Listings} listings", 2, users.Count, listings.Count);
     }
 
-    private async Task Book((string Id, string TenantId, string Role, string Name) buyer, string listingId, int nth, CancellationToken ct)
+    /// <returns>The new showing's id, or null when the booking was skipped or refused.</returns>
+    private async Task<string?> Book((string Id, string TenantId, string Role, string Name) buyer, string listingId, int nth, CancellationToken ct)
     {
         using var scope = As(root.CreateScope(), buyer);
         var sp = scope.ServiceProvider;
         var listing = await sp.GetRequiredService<IListingCatalog>().FindAsync(listingId, ct);
         var open = await sp.GetRequiredService<AvailabilityService>().OpenSlotsAsync(listing!, ct);
-        if (open.Count <= nth) return;
+        if (open.Count <= nth) return null;
         var r = await sp.GetRequiredService<BookingService>().BookAsync(new BookRequest(listingId, InstantPattern.ExtendedIso.Format(open[nth].Start), "seed"), ct);
-        if (!r.IsSuccess) log.LogWarning("Seed booking failed: {Title}", r.Error!.Title);
+        if (!r.IsSuccess) { log.LogWarning("Seed booking failed: {Title}", r.Error!.Title); return null; }
+        return r.Value.Id;
+    }
+
+    private async Task Confirm((string Id, string TenantId, string Role, string Name) agent, string showingId, CancellationToken ct)
+    {
+        using var scope = As(root.CreateScope(), agent);
+        var r = await scope.ServiceProvider.GetRequiredService<BookingService>().ConfirmAsync(showingId, ct);
+        if (!r.IsSuccess) log.LogWarning("Seed confirmation failed: {Title}", r.Error!.Title);
     }
 
     private static IServiceScope As(IServiceScope scope, (string Id, string TenantId, string Role, string Name) user)

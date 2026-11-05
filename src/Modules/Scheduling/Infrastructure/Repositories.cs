@@ -115,6 +115,27 @@ public sealed class SlotHoldRepository(MongoDb db, ITenantContext tenant, MongoS
 
 public sealed class SchedulingSchema : IMongoSchemaSetup
 {
+    /// <summary>
+    /// Databases written before claims existed hold active showings with no claim documents, which the overlap check
+    /// cannot see. Insert the buckets for every active showing that has none. A duplicate key here means the old data
+    /// already contains an overlap (two active showings on the same buckets); the later one simply stays unclaimed,
+    /// which is logged, and the next buyer is still blocked by the claims that did land.
+    /// </summary>
+    private static async Task BackfillClaimsAsync(IMongoCollection<Showing> showings, IMongoCollection<SlotClaim> claims, CancellationToken ct)
+    {
+        var claimed = (await claims.DistinctAsync(x => x.ShowingId, FilterDefinition<SlotClaim>.Empty, cancellationToken: ct)).ToEnumerable(ct).ToHashSet();
+        using var cursor = await showings.FindAsync(Builders<Showing>.Filter.Exists(x => x.ActiveSlotKey), cancellationToken: ct);
+        while (await cursor.MoveNextAsync(ct))
+        {
+            var missing = cursor.Current.Where(s => !claimed.Contains(s.Id)).ToList();
+            if (missing.Count == 0) continue;
+            var docs = missing.SelectMany(s => SlotClaim.Buckets(s.SlotStartUtc, s.SlotEndUtc)
+                .Select(b => new SlotClaim { TenantId = s.TenantId, ListingId = s.ListingId, ShowingId = s.Id, BucketStartUtc = b })).ToList();
+            try { await claims.InsertManyAsync(docs, new InsertManyOptions { IsOrdered = false }, ct); }
+            catch (MongoBulkWriteException<SlotClaim> ex) when (ex.WriteErrors.All(e => e.Category == ServerErrorCategory.DuplicateKey)) { /* pre-existing overlap */ }
+        }
+    }
+
     public async Task ApplyAsync(MongoDb db, CancellationToken ct)
     {
         var showingSchema = BsonDocument.Parse("""
@@ -159,6 +180,7 @@ public sealed class SchedulingSchema : IMongoSchemaSetup
                 new CreateIndexOptions { Name = "ux_tenant_listing_bucket", Unique = true }),
             new CreateIndexModel<SlotClaim>(Builders<SlotClaim>.IndexKeys.Ascending(x => x.TenantId).Ascending(x => x.ShowingId)),
         ], ct);
+        await BackfillClaimsAsync(showings, claims, ct);
 
         await MongoSchema.EnsureCollectionAsync(db.Database, SlotHoldRepository.CollectionName, null, ct);
         var holds = db.Collection<SlotHold>(SlotHoldRepository.CollectionName);

@@ -18,10 +18,16 @@ public sealed class ShowingRules
     public List<WeeklyWindow> Weekly { get; set; } = [];
     public List<string> BlackoutDates { get; set; } = [];
 
+    /// <summary>Slots, buffers and window edges sit on a 5 minute grid: the per bucket overlap claims (SlotClaim) are
+    /// 5 minutes wide, so a slot that starts off that grid would be rounded into a bucket it does not fully occupy.</summary>
+    public const int GridMinutes = 5;
+
     public IEnumerable<string> Validate()
     {
         if (SlotMinutes is < 10 or > 240) yield return "slotMinutes must be between 10 and 240.";
+        else if (SlotMinutes % GridMinutes != 0) yield return $"slotMinutes must be a multiple of {GridMinutes}.";
         if (BufferMinutes is < 0 or > 120) yield return "bufferMinutes must be between 0 and 120.";
+        else if (BufferMinutes % GridMinutes != 0) yield return $"bufferMinutes must be a multiple of {GridMinutes}.";
         if (LeadTimeHours is < 0 or > 336) yield return "leadTimeHours must be between 0 and 336.";
         if (HorizonDays is < 1 or > 90) yield return "horizonDays must be between 1 and 90.";
         foreach (var w in Weekly)
@@ -31,6 +37,8 @@ public sealed class ShowingRules
             if (!TimeOfDay.TryParse(w.Start, out var s) || !TimeOfDay.TryParse(w.End, out var e))
                 yield return $"Window {w.DayOfWeek} {w.Start}-{w.End} must use HH:mm.";
             else if (e <= s) yield return $"Window {w.DayOfWeek} {w.Start}-{w.End} must end after it starts.";
+            else if (s.Minute % GridMinutes != 0 || (w.End != "24:00" && e.Minute % GridMinutes != 0))
+                yield return $"Window {w.DayOfWeek} {w.Start}-{w.End} must start and end on a {GridMinutes} minute boundary.";
         }
         foreach (var group in Weekly.Where(w => TimeOfDay.TryParse(w.Start, out _) && TimeOfDay.TryParse(w.End, out _))
                      .GroupBy(w => w.DayOfWeek, StringComparer.OrdinalIgnoreCase))

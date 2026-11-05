@@ -37,7 +37,10 @@ public static class AppClaims
 
 public sealed record UserView(string Id, string Email, string Name, string Role, string TenantId, string TenantSlug, string TenantName, string TimeZone);
 public sealed record AuthResponse(string Token, UserView User);
-public sealed record LoginRequest(string Email, string Password);
+/// <param name="TenantSlug">Optional: which brokerage to sign in to when the same email exists in more than one.</param>
+public sealed record LoginRequest(string Email, string Password, string? TenantSlug = null);
+/// <summary>A brokerage choice returned in the 409 <c>tenants</c> extension when a login is ambiguous.</summary>
+public sealed record TenantChoice(string Slug, string Name);
 public sealed record RegisterBuyerRequest(string TenantSlug, string Email, string Password, string Name, string? TimeZone = null);
 public sealed record CreateAgentRequest(string Name, string Email, string Password);
 public sealed record AgentView(string Id, string Name, string Email, string TimeZone, int ListingCount = 0);
@@ -80,15 +83,27 @@ public sealed class AuthService(
     public async Task<Result<AuthResponse>> LoginAsync(LoginRequest req, CancellationToken ct)
     {
         // Emails are unique per brokerage, so the same address may exist in several tenants (with their own passwords).
-        // Login has no tenant yet: verify the password against each candidate and sign in the first that matches.
+        // Login has no tenant yet: verify the password against every candidate (optionally narrowed to tenantSlug).
+        // Exactly one match signs in; more than one is ambiguous and the client must pass tenantSlug.
         var candidates = await credentials.FindForLoginAsync(req.Email ?? "", ct);
+        if (!string.IsNullOrWhiteSpace(req.TenantSlug))
+        {
+            var chosen = await tenants.FindBySlugAsync(req.TenantSlug.Trim(), ct);
+            candidates = chosen is null ? [] : candidates.Where(c => c.TenantId == chosen.Id).ToList();
+        }
         var password = req.Password ?? "";
-        User? user = null;
-        foreach (var c in candidates)
-            if (BCrypt.Net.BCrypt.Verify(password, c.PasswordHash)) { user = c; break; }
+        var matches = candidates.Where(c => BCrypt.Net.BCrypt.Verify(password, c.PasswordHash)).ToList();
         if (candidates.Count == 0) BCrypt.Net.BCrypt.Verify(password, DummyHash); // keep unknown emails as slow as known ones
-        if (user is null) return Error.Unauthorized("Email or password is incorrect.");
-        return await RespondAsync(user, ct);
+        if (matches.Count == 0) return Error.Unauthorized("Email or password is incorrect.");
+        if (matches.Count > 1)
+        {
+            var choices = new List<TenantChoice>();
+            foreach (var m in matches)
+                if (await tenants.FindByIdAsync(m.TenantId, ct) is { } t) choices.Add(new TenantChoice(t.Slug, t.Name));
+            return Error.Conflict("That email exists in more than one brokerage; pass tenantSlug.", "Sign in again with the tenantSlug of the brokerage you want.",
+                new Dictionary<string, object?> { ["tenants"] = choices.OrderBy(c => c.Name).ToList() });
+        }
+        return await RespondAsync(matches[0], ct);
     }
 
     public async Task<Result<AuthResponse>> RegisterBuyerAsync(RegisterBuyerRequest req, CancellationToken ct)
