@@ -2,8 +2,11 @@
 
 The ASP.NET Core API listens on `http://localhost:5080` (in Docker: `http://api:8080`).
 Every error is RFC 7807 ProblemDetails: `{ type, title, status, detail, errors? }`.
-All instants are ISO 8601 UTC strings (`2026-11-07T16:00:00Z`). Local times are
-ISO local strings without offset (`2026-11-07T09:00`) and always travel with an IANA zone.
+All instants are ISO 8601 UTC strings (`2026-11-07T16:00:00Z`): `slotStart`, `slotStartUtc`, `startUtc`, `expiresAt`.
+Local times are ISO local strings without offset (`2026-11-07T09:00`) and always travel with an IANA zone: the
+buyer's `ranges` on `/match` and the `localStart`/`localEnd` fields on slots. `slotStart` on holds and bookings is
+the `startUtc` of a slot returned by `/match` or `/listings/{id}/slots`; the optional `timeZone` only chooses the
+zone used for the labels in a 409's `alternatives`.
 
 Auth: `Authorization: Bearer <jwt>` (web, via the Next BFF) or `Bearer hss_pat_...` (MCP).
 JWT claims: `sub` (user id), `tenantId`, `role` (`BrokerageAdmin` | `Agent` | `Buyer`), `name`, `email`.
