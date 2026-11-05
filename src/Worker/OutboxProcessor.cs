@@ -105,15 +105,17 @@ public sealed class OutboxProcessor(MongoDb db, IEmailSender sender, IClock cloc
     /// </summary>
     public async Task<bool> DeliverAsync(string outboxId, CancellationToken ct)
     {
-        // The relay holds the same lease while it publishes to SQS and releases it right after; the consumer can
-        // receive the message inside that window, so a locked, unpublished row is retried briefly before giving up.
+        // The relay holds the same lease while it publishes to SQS and releases it right after; the consumer usually
+        // receives the message inside that window. Retry the lease for a couple of seconds (the relay's update lands
+        // within milliseconds of SendMessage returning); only if the row stays locked, another consumer owns it and
+        // SQS redelivers after the visibility timeout.
         for (var attempt = 0; ; attempt++)
         {
             var msg = await TryLeaseAsync(outboxId, ct);
             if (msg is not null) return await DeliverAsync(msg, ct);
             var current = await Outbox.Find(m => m.Id == outboxId).FirstOrDefaultAsync(ct);
             if (current is null || current.ProcessedAt is not null) return true; // unknown or already delivered: ack
-            if (current.PublishedAt is not null || attempt >= 5) return false;    // leased by another consumer: SQS redelivers
+            if (attempt >= 10) return false;                                      // still leased elsewhere: SQS redelivers
             await Task.Delay(TimeSpan.FromMilliseconds(200), ct);
         }
     }
