@@ -13,7 +13,7 @@ public interface IEmailSender
     Task SendAsync(EmailIntent email, CancellationToken ct);
 }
 
-/// <summary>Local delivery: logs the email. The AWS design swaps in SES behind the same interface (docs/aws-deployment.md).</summary>
+/// <summary>Local delivery: logs the email. SES replaces it behind the same interface when AWS is enabled.</summary>
 public sealed class LogEmailSender(ILogger<LogEmailSender> log) : IEmailSender
 {
     public string Transport => "dev-log";
@@ -25,12 +25,17 @@ public sealed class LogEmailSender(ILogger<LogEmailSender> log) : IEmailSender
 }
 
 /// <summary>
-/// Delivers outbox rows. Claims one row at a time with an atomic lease (so several workers can run), records the
-/// delivery under a unique index on the outbox id (so a retry after a crash never sends twice), then marks the row
-/// processed. Failures back off exponentially and give up after <see cref="MaxAttempts"/>, leaving the row and its
-/// error visible on the admin page (a dead letter, in effect).
+/// The outbox worker. Two modes share the same delivery code:
+/// <list type="bullet">
+/// <item><b>Direct</b> (no AWS): claim an outbox row with an atomic lease and deliver it in process.</item>
+/// <item><b>Queued</b> (AWS): <see cref="RelayNextAsync"/> publishes claimed rows to SQS, and <see cref="DeliverAsync"/>
+/// is called by the queue consumer.</item>
+/// </list>
+/// Delivery is idempotent: <c>sentEmails</c> has a unique index on the outbox id, so a retry after a crash
+/// (or a duplicate SQS delivery) never sends twice. Failures back off exponentially up to <see cref="MaxAttempts"/>;
+/// a row that gives up keeps its last error, visible on the admin "Outbox and emails" page.
 /// </summary>
-public sealed class OutboxProcessor(MongoDb db, IEmailSender sender, IClock clock, ILogger<OutboxProcessor> log) : BackgroundService
+public sealed class OutboxProcessor(MongoDb db, IEmailSender sender, IClock clock, ILogger<OutboxProcessor> log, bool direct = true) : BackgroundService
 {
     public const int MaxAttempts = 5;
     private static readonly Duration Lease = Duration.FromSeconds(30);
@@ -40,7 +45,8 @@ public sealed class OutboxProcessor(MongoDb db, IEmailSender sender, IClock cloc
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        log.LogInformation("Outbox worker started (transport {Transport})", sender.Transport);
+        if (!direct) return;
+        log.LogInformation("Outbox worker started (direct delivery, transport {Transport})", sender.Transport);
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -57,17 +63,55 @@ public sealed class OutboxProcessor(MongoDb db, IEmailSender sender, IClock cloc
         }
     }
 
+    /// <summary>Direct mode: claim, deliver, mark processed.</summary>
     public async Task<bool> ProcessNextAsync(CancellationToken ct)
+    {
+        var msg = await ClaimAsync(ct);
+        if (msg is null) return false;
+        await DeliverAsync(msg, ct);
+        return true;
+    }
+
+    /// <summary>Queued mode, producer side: claim a row and hand it to <paramref name="publish"/>; mark it published.</summary>
+    public async Task<bool> RelayNextAsync(Func<OutboxMessage, CancellationToken, Task> publish, CancellationToken ct)
+    {
+        var msg = await ClaimAsync(ct, unpublishedOnly: true);
+        if (msg is null) return false;
+        try
+        {
+            await publish(msg, ct);
+            await Outbox.UpdateOneAsync(m => m.Id == msg.Id, Builders<OutboxMessage>.Update
+                .Set(m => m.PublishedAt, clock.GetCurrentInstant()).Unset(m => m.LockedUntil).Set(m => m.LastError, null), cancellationToken: ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await FailAsync(msg, ex, ct);
+        }
+        return true;
+    }
+
+    /// <summary>Queued mode, consumer side. Returns true when the message can be acknowledged.</summary>
+    public async Task<bool> DeliverAsync(string outboxId, CancellationToken ct)
+    {
+        var msg = await Outbox.Find(m => m.Id == outboxId).FirstOrDefaultAsync(ct);
+        if (msg is null || msg.ProcessedAt is not null) return true; // unknown or already delivered: ack
+        return await DeliverAsync(msg, ct);
+    }
+
+    private async Task<OutboxMessage?> ClaimAsync(CancellationToken ct, bool unpublishedOnly = false)
     {
         var now = clock.GetCurrentInstant();
         var f = Builders<OutboxMessage>.Filter;
         var claim = f.And(f.Eq(m => m.ProcessedAt, null), f.Lt(m => m.Attempts, MaxAttempts),
             f.Or(f.Eq(m => m.LockedUntil, null), f.Lt(m => m.LockedUntil, now)));
-        var msg = await Outbox.FindOneAndUpdateAsync(claim,
+        if (unpublishedOnly) claim = f.And(claim, f.Eq(m => m.PublishedAt, null));
+        return await Outbox.FindOneAndUpdateAsync(claim,
             Builders<OutboxMessage>.Update.Set(m => m.LockedUntil, now + Lease).Inc(m => m.Attempts, 1),
             new FindOneAndUpdateOptions<OutboxMessage> { Sort = Builders<OutboxMessage>.Sort.Ascending(m => m.OccurredAt), ReturnDocument = ReturnDocument.After }, ct);
-        if (msg is null) return false;
+    }
 
+    private async Task<bool> DeliverAsync(OutboxMessage msg, CancellationToken ct)
+    {
         try
         {
             if (msg.Type == OutboxTypes.Email)
@@ -90,14 +134,20 @@ public sealed class OutboxProcessor(MongoDb db, IEmailSender sender, IClock cloc
             }
             await Outbox.UpdateOneAsync(m => m.Id == msg.Id, Builders<OutboxMessage>.Update
                 .Set(m => m.ProcessedAt, clock.GetCurrentInstant()).Unset(m => m.LockedUntil).Set(m => m.LastError, null), cancellationToken: ct);
+            return true;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            var backoff = Duration.FromSeconds(Math.Pow(2, msg.Attempts) * 5);
-            log.LogWarning(ex, "Outbox message {Id} failed (attempt {Attempt})", msg.Id, msg.Attempts);
-            await Outbox.UpdateOneAsync(m => m.Id == msg.Id, Builders<OutboxMessage>.Update
-                .Set(m => m.LockedUntil, clock.GetCurrentInstant() + backoff).Set(m => m.LastError, ex.Message), cancellationToken: ct);
+            await FailAsync(msg, ex, ct);
+            return false;
         }
-        return true;
+    }
+
+    private async Task FailAsync(OutboxMessage msg, Exception ex, CancellationToken ct)
+    {
+        var backoff = Duration.FromSeconds(Math.Pow(2, msg.Attempts) * 5);
+        log.LogWarning(ex, "Outbox message {Id} failed (attempt {Attempt})", msg.Id, msg.Attempts);
+        await Outbox.UpdateOneAsync(m => m.Id == msg.Id, Builders<OutboxMessage>.Update
+            .Set(m => m.LockedUntil, clock.GetCurrentInstant() + backoff).Set(m => m.LastError, ex.Message), cancellationToken: ct);
     }
 }

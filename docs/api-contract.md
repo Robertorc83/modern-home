@@ -54,7 +54,9 @@ JWT claims: `sub` (user id), `tenantId`, `role` (`BrokerageAdmin` | `Agent` | `B
 | POST | `/listings` | Agent. Body = listing without id/owner. Returns listing |
 | PUT | `/listings/{id}` | Agent owner (or Admin). Body = listing fields |
 | PUT | `/listings/{id}/showing-rules` | Agent owner. Body = showingRules |
-| GET | `/listings/{id}/slots?from=&to=&timeZone=` | open slots: `{ listingId, timeZone, days: [ dayGroup ] }` |
+| GET | `/listings/{id}/slots?from=&to=&timeZone=` | open slots: `{ listingId, timeZone, viewerTimeZone, days: [ dayGroup ] }` |
+| GET | `/listings/{id}/showings` | Agent owner / Admin: showings on the listing |
+| POST | `/listings/{id}/photos/upload-url` | Agent owner `{ contentType }` → `{ uploadUrl, key, displayUrl, expiresAt }` (presigned S3 PUT; 422 when AWS is off) |
 
 ## Matching
 
@@ -91,9 +93,9 @@ Response:
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/showings/holds` | Buyer `{ listingId, slotStart }` → `{ id, listingId, slotStartUtc, expiresAt }`. 409 if held/booked by someone else |
+| POST | `/showings/holds` | Buyer `{ listingId, slotStart, timeZone? }` → `{ id, listingId, slotStartUtc, expiresAt }`. 409 (with `alternatives`) if held or booked by someone else; 422 if not an open slot |
 | DELETE | `/showings/holds/{id}` | Buyer releases own hold. 204 |
-| POST | `/showings` | Buyer `{ listingId, slotStart }` → `showing` (201). 409 ProblemDetails with `extensions.alternatives: [slot]` when taken. 422 when not an open slot |
+| POST | `/showings` | Buyer `{ listingId, slotStart, timeZone? }` → `showing` (201). 409 ProblemDetails with `alternatives: [slot]` (root level, labels in `timeZone`) when taken or overlapping. 422 when not an open slot |
 | POST | `/showings/{id}/confirm` | Agent owner |
 | POST | `/showings/{id}/decline` | Agent owner |
 | POST | `/showings/{id}/cancel` | Buyer owner (or agent) |
@@ -117,4 +119,4 @@ Response:
 
 ## Admin / ops
 
-`GET /admin/outbox` → recent outbox rows + sent emails. `GET /health` → `{ status: "ok", mongo: "ok" }`.
+`GET /admin/outbox` → `{ outbox: [...], emails: [...], transport: "ses" | "dev-log", sesInboxUrl }` (recent outbox rows and sent emails; `sesInboxUrl` is LocalStack's `/_aws/ses` when AWS is on). `GET /health` → `{ status: "ok", mongo: "ok" }`.

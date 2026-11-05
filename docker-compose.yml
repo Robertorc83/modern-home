@@ -14,6 +14,24 @@ services:
       retries: 30
       start_period: 5s
 
+  # Local AWS: S3 (photos), SQS (+ DLQ) and SES. Pinned to a tokenless image; no account needed.
+  localstack:
+    image: localstack/localstack:4.12.0
+    environment:
+      SERVICES: s3,sqs,ses
+      PHOTO_BUCKET: listing-photos
+      NOTIFICATIONS_QUEUE: showing-notifications
+      SENDER_EMAIL: no-reply@showings.local
+    ports: ["4566:4566"]
+    volumes:
+      - ./deploy/localstack/init-aws.sh:/etc/localstack/init/ready.d/init-aws.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "awslocal sqs get-queue-url --queue-name showing-notifications >/dev/null 2>&1 && awslocal s3api head-bucket --bucket listing-photos"]
+      interval: 5s
+      timeout: 10s
+      retries: 40
+      start_period: 10s
+
   api:
     build: { context: ., dockerfile: src/Api/Dockerfile }
     environment:
@@ -22,9 +40,16 @@ services:
       Auth__SigningKey: ${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-0123456789abcdef}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       Seed__Enabled: "true"
+      Aws__Enabled: "true"
+      Aws__ServiceUrl: http://localstack:4566
+      Aws__PublicServiceUrl: http://localhost:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
     ports: ["5080:8080"]
     depends_on:
       mongo: { condition: service_healthy }
+      localstack: { condition: service_healthy }
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
       interval: 5s
@@ -35,14 +60,20 @@ services:
     build: { context: ., dockerfile: src/Worker/Dockerfile }
     environment:
       Mongo__ConnectionString: mongodb://mongo:27017/?replicaSet=rs0&directConnection=true
+      Aws__Enabled: "true"
+      Aws__ServiceUrl: http://localstack:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
     depends_on:
       api: { condition: service_healthy }
+      localstack: { condition: service_healthy }
 
   web:
     build: { context: apps/web }
     environment:
       API_URL: http://api:8080
-      NEXT_PUBLIC_MCP_URL: ${PUBLIC_MCP_URL:-http://localhost:5080/mcp}
+      PUBLIC_MCP_URL: ${PUBLIC_MCP_URL:-http://localhost:5080/mcp}
     ports: ["3000:3000"]
     depends_on:
       api: { condition: service_healthy }

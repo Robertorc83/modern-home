@@ -15,6 +15,8 @@ public sealed class OutboxMessage
     public BsonDocument Payload { get; set; } = new();
     public Instant OccurredAt { get; set; }
     public Instant? ProcessedAt { get; set; }
+    /// <summary>Set when the relay has put the row on the queue (queued mode only).</summary>
+    public Instant? PublishedAt { get; set; }
     public Instant? LockedUntil { get; set; }
     public int Attempts { get; set; }
     public string? LastError { get; set; }
