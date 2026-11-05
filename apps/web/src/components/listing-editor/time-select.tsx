@@ -25,8 +25,10 @@ export function TimeSelect({
   includeMidnight?: boolean;
 }) {
   const base = includeMidnight ? TIMES_WITH_MIDNIGHT : TIMES;
-  // A saved value off the 15-minute grid (the API stores "24:00" as "23:59") must still be selectable.
-  const times = base.includes(value) ? base : [...base, value].sort();
+  // A saved value off the 15-minute grid (e.g. "09:05" set through the API, which keeps "24:00" as
+  // is) must still be selectable. An empty value never becomes an item: Radix rejects "" as a
+  // SelectItem value, and the trigger simply shows nothing selected.
+  const times = !value || base.includes(value) ? base : [...base, value].sort();
   return (
     <Select value={value} onValueChange={onChange}>
       <SelectTrigger size="sm" className="w-28" aria-label={label} aria-invalid={invalid || undefined}>

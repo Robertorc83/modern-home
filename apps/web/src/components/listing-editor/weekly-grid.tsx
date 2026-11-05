@@ -54,7 +54,8 @@ export function WeeklyGrid({
   }
 
   return (
-    <div className="divide-y rounded-lg border">
+    // The id and tabIndex let the editor scroll to and focus the grid when a window is invalid.
+    <div id="weekly-grid" tabIndex={-1} className="divide-y rounded-lg border outline-none focus-visible:ring-2">
       {DAYS_OF_WEEK.map((day) => {
         const entries = weekly
           .map((w, index) => ({ w, index }))

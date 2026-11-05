@@ -9,6 +9,7 @@ import { ManagedListingCard } from "@/components/listing/listing-admin-card";
 import { Button } from "@/components/ui/button";
 import { useResource } from "@/hooks/use-resource";
 import { api } from "@/lib/api";
+import { sortByAddress } from "@/lib/format";
 
 export function MyListings() {
   const listings = useResource(() => api.listings({ mine: true }));
@@ -43,7 +44,7 @@ export function MyListings() {
         />
       ) : (
         <ListingGrid>
-          {listings.data.map((listing) => (
+          {sortByAddress(listings.data).map((listing) => (
             <ManagedListingCard key={listing.id} listing={listing} editable />
           ))}
         </ListingGrid>

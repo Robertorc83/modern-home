@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
-import { ArrowLeft, CalendarClock, Eye, UserRound } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ArrowLeft, CalendarClock, Eye, RefreshCw, UserRound } from "lucide-react";
 import { BookingDialog, type BookingTarget } from "@/components/buyer/booking-dialog";
 import { SlotDays } from "@/components/slots";
 import { ErrorState, ListSkeleton } from "@/components/states";
@@ -111,7 +111,23 @@ function DetailBody({ listing }: { listing: Listing }) {
   }, [listing.id, timeZone, horizon]);
   const zonesDiffer = listing.timeZone !== timeZone;
   const [allDays, setAllDays] = useState(false);
+  // Set when a hold or booking lost a race: the list is refetched and the user told why it moved.
+  const [timesUpdated, setTimesUpdated] = useState(false);
   const dayCount = slots.data?.days.length ?? 0;
+
+  // Slots go stale while the tab sits in the background; refetch when the user comes back.
+  const reloadSlots = slots.reload;
+  useEffect(() => {
+    const onFocus = () => {
+      if (document.visibilityState === "visible") void reloadSlots();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, [reloadSlots]);
   const facts = [
     { label: "Price", value: formatPrice(listing.price, listing.timeZone) },
     { label: "Beds / baths", value: formatBedsBaths(listing) },
@@ -186,6 +202,12 @@ function DetailBody({ listing }: { listing: Listing }) {
                 Times in your zone ({timeZone}); the home is in {listing.timeZone}, shown under each time.
               </p>
             ) : null}
+            {timesUpdated ? (
+              <Alert>
+                <RefreshCw />
+                <AlertDescription>Times were updated: that slot was just taken, so pick another one.</AlertDescription>
+              </Alert>
+            ) : null}
             {slots.error ? (
               <ErrorState message={slots.error.message} onRetry={slots.reload} />
             ) : !slots.data ? (
@@ -200,7 +222,14 @@ function DetailBody({ listing }: { listing: Listing }) {
                   days={slots.data.days}
                   maxDays={allDays ? undefined : COLLAPSED_DAYS}
                   showListingTime={zonesDiffer}
-                  onSelect={isBuyer ? (slot) => setBooking({ listing, slot }) : undefined}
+                  onSelect={
+                    isBuyer
+                      ? (slot) => {
+                          setTimesUpdated(false);
+                          setBooking({ listing, slot });
+                        }
+                      : undefined
+                  }
                 />
                 {dayCount > COLLAPSED_DAYS ? (
                   <Button
@@ -236,6 +265,10 @@ function DetailBody({ listing }: { listing: Listing }) {
         onClose={() => setBooking(null)}
         onBooked={() => {
           setBooking(null);
+          void slots.reload();
+        }}
+        onSlotsChanged={() => {
+          setTimesUpdated(true);
           void slots.reload();
         }}
       />

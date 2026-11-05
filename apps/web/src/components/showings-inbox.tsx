@@ -56,7 +56,8 @@ export function ShowingsInbox({
   // Requests that arrived live while another tab was open; shown as a badge instead of switching tabs.
   const [unseenRequests, setUnseenRequests] = useState(0);
   const showings = useResource(() => api.inbox());
-  const { isFlashing, flash } = useFlash();
+  // A new request is the demo's key moment: keep the highlight on long enough to be noticed.
+  const { isFlashing, flash } = useFlash(4000);
   const listingsById = useListingIndex(useUser().role);
 
   // Events can arrive in bursts; one reload after the last of them is enough to reconcile the list.
@@ -66,7 +67,8 @@ export function ShowingsInbox({
       // Toast and flash from the event payload itself, so a burst of events drops none of them.
       flash(event.showingId);
       if (event.operation?.toLowerCase() === "insert") {
-        toast.info("New showing request", {
+        // Auto-confirmed listings skip the request step: the showing arrives already confirmed.
+        toast.info(event.status === "Confirmed" ? "New showing booked" : "New showing request", {
           description: [event.buyerName, event.listingAddress].filter(Boolean).join(" · ") || undefined,
         });
         if (event.status === "Requested" && tab !== "Requested") setUnseenRequests((n) => n + 1);
@@ -114,6 +116,24 @@ export function ShowingsInbox({
   };
   const visible = tab === "All" ? all : all.filter((s) => s.status === tab);
 
+  const actionsFor = (s: Showing) =>
+    canRespond && s.status === "Requested" && !isPast(s) ? (
+      <div className="flex justify-end gap-2">
+        <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => respond(s, "decline")}>
+          {busy === `${s.id}:decline` ? <Loader2 className="animate-spin" /> : <X />}
+          Decline
+        </Button>
+        <Button size="sm" disabled={busy !== null} onClick={() => respond(s, "confirm")}>
+          {busy === `${s.id}:confirm` ? <Loader2 className="animate-spin" /> : <Check />}
+          Approve
+        </Button>
+      </div>
+    ) : null;
+
+  // Highlight for rows touched by a live event: an amber wash plus a left bar that reads at a glance.
+  const flashClass = (s: Showing) =>
+    isFlashing(s.id) && "bg-amber-100/70 shadow-[inset_4px_0_0_0_var(--color-amber-500)] hover:bg-amber-100/70";
+
   return (
     <>
       <PageHeader title={title} description={description} actions={<LiveIndicator state={streamState} />} />
@@ -150,74 +170,84 @@ export function ShowingsInbox({
       ) : visible.length === 0 ? (
         <EmptyState {...EMPTY_COPY[tab]} />
       ) : (
-        <Card className="py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="pl-4">When (listing time)</TableHead>
-                <TableHead>Listing</TableHead>
-                <TableHead>Buyer</TableHead>
-                {showAgent ? <TableHead>Agent</TableHead> : null}
-                <TableHead>Status</TableHead>
-                {canRespond ? <TableHead className="pr-4 text-right">Actions</TableHead> : null}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {visible.map((s) => (
-                <TableRow
-                  key={s.id}
-                  className={cn(
-                    "transition-colors duration-700",
-                    isFlashing(s.id) && "bg-amber-100/70 hover:bg-amber-100/70",
-                    isPast(s) && "text-muted-foreground",
-                  )}
-                >
-                  <TableCell className="pl-4">
+        <>
+          {/* Narrow screens: stacked cards, so the actions never hide behind a horizontal scroll. */}
+          <Card className="gap-0 divide-y py-0 md:hidden">
+            {visible.map((s) => (
+              <article
+                key={s.id}
+                aria-label={`${s.listingAddress}, ${listingTimeLabel(s)}`}
+                className={cn(
+                  "space-y-3 px-4 py-3 transition-colors duration-700",
+                  flashClass(s),
+                  isPast(s) && "text-muted-foreground",
+                )}
+              >
+                <div className="flex items-start gap-3">
+                  <ListingThumb listing={listingsById.get(s.listingId)} className="w-16 shrink-0" />
+                  <div className="min-w-0 flex-1 space-y-0.5">
                     <div className="font-medium">{listingTimeLabel(s)}</div>
+                    <div className="truncate text-sm">
+                      {s.listingAddress}
+                      <span className="text-muted-foreground"> · {s.listingCity}</span>
+                    </div>
                     <div className="text-xs text-muted-foreground">
-                      Requested {formatRelative(s.createdAt)}
+                      {s.buyerName}
+                      {showAgent ? ` · with ${s.agentName}` : ""} · requested {formatRelative(s.createdAt)}
                     </div>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-3">
-                      <ListingThumb listing={listingsById.get(s.listingId)} className="w-14" />
-                      <div>
-                        <div>{s.listingAddress}</div>
-                        <div className="text-xs text-muted-foreground">{s.listingCity}</div>
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell>{s.buyerName}</TableCell>
-                  {showAgent ? <TableCell>{s.agentName}</TableCell> : null}
-                  <TableCell>
-                    <StatusBadge status={s.status} />
-                  </TableCell>
-                  {canRespond ? (
-                    <TableCell className="pr-4">
-                      {s.status === "Requested" && !isPast(s) ? (
-                        <div className="flex justify-end gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={busy !== null}
-                            onClick={() => respond(s, "decline")}
-                          >
-                            {busy === `${s.id}:decline` ? <Loader2 className="animate-spin" /> : <X />}
-                            Decline
-                          </Button>
-                          <Button size="sm" disabled={busy !== null} onClick={() => respond(s, "confirm")}>
-                            {busy === `${s.id}:confirm` ? <Loader2 className="animate-spin" /> : <Check />}
-                            Approve
-                          </Button>
-                        </div>
-                      ) : null}
-                    </TableCell>
-                  ) : null}
+                  </div>
+                  <StatusBadge status={s.status} className="shrink-0" />
+                </div>
+                {actionsFor(s)}
+              </article>
+            ))}
+          </Card>
+
+          <Card className="hidden py-0 md:block">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="pl-4">When (listing time)</TableHead>
+                  <TableHead>Listing</TableHead>
+                  <TableHead>Buyer</TableHead>
+                  {showAgent ? <TableHead>Agent</TableHead> : null}
+                  <TableHead>Status</TableHead>
+                  {canRespond ? <TableHead className="pr-4 text-right">Actions</TableHead> : null}
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+              </TableHeader>
+              <TableBody>
+                {visible.map((s) => (
+                  <TableRow
+                    key={s.id}
+                    className={cn("transition-colors duration-700", flashClass(s), isPast(s) && "text-muted-foreground")}
+                  >
+                    <TableCell className="pl-4">
+                      <div className="font-medium">{listingTimeLabel(s)}</div>
+                      <div className="text-xs text-muted-foreground">
+                        Requested {formatRelative(s.createdAt)}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-3">
+                        <ListingThumb listing={listingsById.get(s.listingId)} className="w-14" />
+                        <div>
+                          <div>{s.listingAddress}</div>
+                          <div className="text-xs text-muted-foreground">{s.listingCity}</div>
+                        </div>
+                      </div>
+                    </TableCell>
+                    <TableCell>{s.buyerName}</TableCell>
+                    {showAgent ? <TableCell>{s.agentName}</TableCell> : null}
+                    <TableCell>
+                      <StatusBadge status={s.status} />
+                    </TableCell>
+                    {canRespond ? <TableCell className="pr-4">{actionsFor(s)}</TableCell> : null}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </Card>
+        </>
       )}
     </>
   );

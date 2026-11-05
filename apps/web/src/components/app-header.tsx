@@ -35,6 +35,16 @@ export const ROLE_LABEL: Record<Role, string> = {
   Buyer: "Buyer",
 };
 
+/** "Jordan Lee" → "JL"; a single name gives its first letter. */
+function initials(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]!.toUpperCase())
+    .join("");
+}
+
 function isActive(pathname: string, href: string): boolean {
   // Section roots ("/admin", "/buyer") only match exactly; deeper links match their subtree.
   if (href === "/buyer") return pathname === href || pathname.startsWith("/buyer/listings/");
@@ -90,6 +100,14 @@ export function AppHeader() {
             {ROLE_LABEL[user.role]}
           </Badge>
           <span className="hidden text-sm text-muted-foreground lg:inline">{user.name}</span>
+          <span
+            className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground lg:hidden"
+            title={user.name}
+            aria-label={user.name}
+            role="img"
+          >
+            {initials(user.name)}
+          </span>
           <Button variant="ghost" size="sm" onClick={signOut} disabled={signingOut} aria-label="Sign out">
             <LogOut />
             <span className="hidden sm:inline">Sign out</span>

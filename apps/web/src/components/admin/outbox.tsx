@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useResource } from "@/hooks/use-resource";
 import { api } from "@/lib/api";
 import { formatRelative } from "@/lib/time";
-import { RefreshCw } from "lucide-react";
+import { ExternalLink, RefreshCw } from "lucide-react";
 
 type Row = Record<string, unknown>;
 
@@ -66,15 +66,46 @@ function DataTable({ rows }: { rows: Row[] }) {
   );
 }
 
+/** The scalar part of the outbox answer: how emails leave the system, and where to see them. */
+function delivery(data: unknown): { transport: string | null; sesInboxUrl: string | null } {
+  const row = data && typeof data === "object" && !Array.isArray(data) ? (data as Row) : {};
+  const url = typeof row.sesInboxUrl === "string" && /^https?:\/\//.test(row.sesInboxUrl) ? row.sesInboxUrl : null;
+  return { transport: typeof row.transport === "string" ? row.transport : null, sesInboxUrl: url };
+}
+
 export function Outbox() {
   const outbox = useResource(() => api.outbox());
   const notEnabled = outbox.error?.status === 404;
+  const { transport, sesInboxUrl } = delivery(outbox.data);
 
   return (
     <>
       <PageHeader
         title="Outbox"
-        description="Domain events written in the same transaction as the change, and the emails they produced."
+        description={
+          <>
+            Domain events written in the same transaction as the change, and the emails they produced.
+            {transport ? (
+              <>
+                {" "}
+                Transport: <code className="rounded bg-muted px-1 py-0.5 text-xs">{transport}</code>.{" "}
+                {sesInboxUrl ? (
+                  <a
+                    href={sesInboxUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 underline underline-offset-4"
+                  >
+                    Open the LocalStack SES inbox
+                    <ExternalLink className="size-3" />
+                  </a>
+                ) : (
+                  "Emails are logged by the worker instead of being sent."
+                )}
+              </>
+            ) : null}
+          </>
+        }
         actions={
           <Button variant="outline" size="sm" onClick={outbox.reload} disabled={outbox.loading}>
             <RefreshCw className={outbox.loading ? "animate-spin" : undefined} />

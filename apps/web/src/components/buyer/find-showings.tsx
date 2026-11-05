@@ -46,6 +46,11 @@ function buildRequest(timeZone: string, ranges: LocalRange[], filters: SearchFil
   };
 }
 
+/** The API's "Unknown place" answer belongs under the Near field, not in place of the results. */
+function isNearError(err: ApiError, near: string): boolean {
+  return err.status === 400 && near.trim() !== "" && /unknown place/i.test(err.problem.detail ?? "");
+}
+
 export function FindShowings() {
   const user = useUser();
   const [timeZone, setTimeZone] = useState(() => user.timeZone || browserTimeZone());
@@ -54,20 +59,28 @@ export function FindShowings() {
   const [parsed, setParsed] = useState<ParsedAvailability | null>(null);
   const [filters, setFilters] = useState<SearchFilters>(DEFAULT_FILTERS);
 
-  // The ranges of the last search; filter changes re-run it.
-  const [searchRanges, setSearchRanges] = useState<LocalRange[] | null>(null);
+  // Once a search has been made, every change to the form (ranges, zone, filters) re-runs it with
+  // the CURRENT form state; while the ranges are invalid nothing runs and the last results stay.
+  const [submitted, setSubmitted] = useState(false);
   const [response, setResponse] = useState<MatchResponse | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
+  const [nearError, setNearError] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [booking, setBooking] = useState<BookingTarget | null>(null);
 
   const today = todayInZone(timeZone);
   const manualValid = manual.length > 0 && manual.every((r) => rangeError(r, today) === null);
+  const activeRanges: LocalRange[] | null = useMemo(() => {
+    if (mode === "manual") return manualValid ? toLocalRanges(manual) : null;
+    return parsed && parsed.ranges.length > 0 ? parsed.ranges : null;
+  }, [mode, manual, manualValid, parsed]);
   const request = useMemo(
-    () => (searchRanges ? buildRequest(timeZone, searchRanges, filters) : null),
-    [timeZone, searchRanges, filters],
+    () => (submitted && activeRanges ? buildRequest(timeZone, activeRanges, filters) : null),
+    [submitted, timeZone, activeRanges, filters],
   );
+  // Compared by value, so re-renders that leave the request unchanged do not trigger a search.
+  const requestKey = request ? JSON.stringify(request) : null;
 
   // Before any search, show the brokerage's homes so the page is never empty. Filters apply here too
   // (except "near", which only the matcher understands).
@@ -83,32 +96,65 @@ export function FindShowings() {
     [browseFilters.city, browseFilters.maxPrice, browseFilters.minBeds, browseFilters.propertyType],
   );
 
-  const generation = useRef(0);
+  // The request in flight, if any. An identical request (e.g. "Find" pressed right after a filter
+  // change already started it) joins it instead of firing twice; a different one aborts it.
+  const inFlight = useRef<{ key: string; controller: AbortController } | null>(null);
   useEffect(() => {
-    if (!request) return;
-    const current = ++generation.current;
+    if (!requestKey) return;
+    if (inFlight.current?.key === requestKey) return;
     const timer = setTimeout(async () => {
+      inFlight.current?.controller.abort();
+      const controller = new AbortController();
+      inFlight.current = { key: requestKey, controller };
       setSearching(true);
       try {
-        const result = await api.match(request);
-        if (current !== generation.current) return;
+        const result = await api.match(JSON.parse(requestKey) as MatchRequest, { signal: controller.signal });
+        if (controller.signal.aborted) return;
         setResponse(result);
         setError(null);
+        setNearError(null);
       } catch (err) {
-        if (current !== generation.current) return;
-        setError(err instanceof ApiError ? err : new ApiError(0, { detail: String(err) }));
+        if (controller.signal.aborted) return;
+        const apiError = err instanceof ApiError ? err : new ApiError(0, { detail: String(err) });
+        const near = (JSON.parse(requestKey) as MatchRequest).near ?? "";
+        if (isNearError(apiError, near)) {
+          setNearError(apiError.message);
+          setError(null);
+        } else {
+          setError(apiError);
+        }
       } finally {
-        if (current === generation.current) setSearching(false);
+        if (!controller.signal.aborted) {
+          inFlight.current = null;
+          setSearching(false);
+        }
       }
     }, 300);
     return () => clearTimeout(timer);
-  }, [request, refreshKey]);
+  }, [requestKey, refreshKey]);
+
+  // Leaving the page cancels whatever is still running.
+  useEffect(() => () => inFlight.current?.controller.abort(), []);
 
   function changeTimeZone(zone: string) {
     setTimeZone(zone);
-    // Local ranges are meaningless in another zone: parsed text must be re-parsed.
+    // Local ranges are meaningless in another zone: parsed text must be re-parsed. Manual ranges
+    // simply mean the same wall-clock times in the new zone, so that search re-runs by itself.
     setParsed(null);
-    if (mode === "ai") setSearchRanges(null);
+    if (mode === "ai") browseAll();
+  }
+
+  function browseAll() {
+    setSubmitted(false);
+    setResponse(null);
+    setError(null);
+    setNearError(null);
+  }
+
+  function search() {
+    setSubmitted(true);
+    // Refresh even when nothing in the form changed since the last search (slots may have moved).
+    setRefreshKey((k) => k + 1);
   }
 
   function onBooked() {
@@ -116,6 +162,8 @@ export function FindShowings() {
     setBooking(null);
     setRefreshKey((k) => k + 1);
   }
+
+  const showResults = submitted && (response !== null || error !== null || activeRanges !== null);
 
   return (
     <>
@@ -155,14 +203,7 @@ export function FindShowings() {
                 </TabsList>
                 <TabsContent value="manual" className="space-y-4 pt-2">
                   <ManualRanges ranges={manual} onChange={setManual} today={today} />
-                  <Button
-                    className="w-full"
-                    disabled={!manualValid || searching}
-                    onClick={() => {
-                      setSearchRanges(toLocalRanges(manual));
-                      setRefreshKey((k) => k + 1);
-                    }}
-                  >
+                  <Button className="w-full" disabled={!manualValid || searching} onClick={search}>
                     {searching ? <Loader2 className="animate-spin" /> : <Search />}
                     Find showings
                   </Button>
@@ -173,10 +214,7 @@ export function FindShowings() {
                     parsed={parsed}
                     onParsed={setParsed}
                     searching={searching}
-                    onSearch={(ranges) => {
-                      setSearchRanges(ranges);
-                      setRefreshKey((k) => k + 1);
-                    }}
+                    onSearch={search}
                   />
                 </TabsContent>
               </Tabs>
@@ -189,7 +227,14 @@ export function FindShowings() {
               <CardDescription>Results update as you change them.</CardDescription>
             </CardHeader>
             <CardContent>
-              <Filters value={filters} onChange={setFilters} />
+              <Filters
+                value={filters}
+                onChange={(next) => {
+                  if (next.near !== filters.near) setNearError(null);
+                  setFilters(next);
+                }}
+                nearError={nearError}
+              />
             </CardContent>
           </Card>
         </div>
@@ -197,7 +242,7 @@ export function FindShowings() {
         <section aria-label="Results" aria-busy={searching} className="min-w-0">
           {error && !searching ? (
             <ErrorState message={error.message} onRetry={() => setRefreshKey((k) => k + 1)} />
-          ) : !searchRanges ? (
+          ) : !showResults ? (
             <BrowseListings
               listings={browse.data}
               error={browse.error?.message}
@@ -218,15 +263,7 @@ export function FindShowings() {
                     ? `${response.results.length} ${response.results.length === 1 ? "home" : "homes"} with open slots in your times`
                     : "Search results"}
                 </p>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setSearchRanges(null);
-                    setResponse(null);
-                    setError(null);
-                  }}
-                >
+                <Button variant="ghost" size="sm" onClick={browseAll}>
                   Browse all homes
                 </Button>
               </div>
@@ -241,6 +278,8 @@ export function FindShowings() {
         searchTimeZone={response?.timeZone ?? timeZone}
         onClose={() => setBooking(null)}
         onBooked={onBooked}
+        // Someone else took the slot: the results underneath are stale too.
+        onSlotsChanged={() => setRefreshKey((k) => k + 1)}
       />
     </>
   );

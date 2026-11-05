@@ -36,6 +36,8 @@ export function BlackoutDates({
           min={minDate}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
+          // Some pickers (iOS, programmatic fills) only raise `input`; keep the button in step with them.
+          onInput={(e) => setDraft(e.currentTarget.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               e.preventDefault();

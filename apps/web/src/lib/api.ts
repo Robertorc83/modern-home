@@ -12,7 +12,6 @@ import type {
   ParsedAvailability,
   ProblemDetails,
   Showing,
-  ShowingRules,
   ShowingStatus,
   SlotHold,
   SlotsResponse,
@@ -84,7 +83,18 @@ export function redirectToLogin(): Promise<never> {
   return new Promise<never>(() => undefined);
 }
 
-async function request<T>(method: string, path: string, body?: unknown, query?: Query): Promise<T> {
+interface RequestOptions {
+  /** Aborting rejects with an ApiError whose status is 0; callers check `signal.aborted` to ignore it. */
+  signal?: AbortSignal;
+}
+
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  query?: Query,
+  options?: RequestOptions,
+): Promise<T> {
   let res: Response;
   try {
     res = await fetch(buildUrl(path, query), {
@@ -92,8 +102,10 @@ async function request<T>(method: string, path: string, body?: unknown, query?: 
       headers: body === undefined ? undefined : { "Content-Type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
       cache: "no-store",
+      signal: options?.signal,
     });
   } catch {
+    if (options?.signal?.aborted) throw new ApiError(0, { title: "Aborted", detail: "The request was cancelled." });
     throw new ApiError(0, { title: "Network error", detail: "Could not reach the server." });
   }
 
@@ -143,13 +155,12 @@ export const api = {
   createListing: (body: ListingInput) => api.post<Listing>("/listings", body),
   updateListing: (id: string, body: ListingInput) =>
     api.put<Listing>(`/listings/${encodeURIComponent(id)}`, body),
-  saveRules: (id: string, rules: ShowingRules) =>
-    api.put<Listing | ShowingRules>(`/listings/${encodeURIComponent(id)}/showing-rules`, rules),
   slots: (id: string, query: { from: string; to: string; timeZone?: string }) =>
     api.get<SlotsResponse>(`/listings/${encodeURIComponent(id)}/slots`, query),
 
   // Matching
-  match: (body: MatchRequest) => api.post<MatchResponse>("/match", body),
+  match: (body: MatchRequest, options?: RequestOptions) =>
+    request<MatchResponse>("POST", "/match", body, undefined, options),
 
   // Scheduling. `timeZone` is the buyer's zone, so 409 alternatives come back labelled in it.
   hold: (listingId: string, slotStart: string, timeZone: string) =>

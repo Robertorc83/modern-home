@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { Loader2 } from "lucide-react";
+import { ChevronDown, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { ListingThumb } from "@/components/listing/listing-thumb";
 import { LiveIndicator } from "@/components/live-indicator";
@@ -34,9 +34,12 @@ import type { Listing, Showing } from "@/lib/types";
 const STATUS_NOTE: Partial<Record<Showing["status"], string>> = {
   Requested: "Waiting for the agent to approve",
   Confirmed: "See you there",
-  Declined: "The agent declined this time",
-  Cancelled: "Cancelled",
 };
+
+/** Nothing left to happen: the slot is behind us, or the showing was cancelled or declined. */
+function isDone(showing: Showing): boolean {
+  return isPast(showing) || showing.status === "Cancelled" || showing.status === "Declined";
+}
 
 export function MyShowings() {
   const user = useUser();
@@ -84,8 +87,9 @@ export function MyShowings() {
   }
 
   const sorted = showings.data ? sortShowings(showings.data) : [];
-  const upcoming = sorted.filter((s) => !isPast(s));
-  const past = sorted.filter(isPast);
+  const upcoming = sorted.filter((s) => !isDone(s));
+  const done = sorted.filter(isDone);
+  const [showDone, setShowDone] = useState(false);
 
   return (
     <>
@@ -120,13 +124,16 @@ export function MyShowings() {
             listingsById={listingsById}
             onCancel={setCancelling}
           />
-          {past.length > 0 ? (
+          {done.length > 0 ? (
             <ShowingList
-              title="Past"
-              showings={past}
+              title="Past & cancelled"
+              showings={done}
               userZone={user.timeZone}
               isFlashing={isFlashing}
               listingsById={listingsById}
+              muted
+              collapsed={!showDone}
+              onToggle={() => setShowDone((v) => !v)}
             />
           ) : null}
         </div>
@@ -167,6 +174,9 @@ function ShowingList({
   isFlashing,
   listingsById,
   onCancel,
+  muted = false,
+  collapsed = false,
+  onToggle,
 }: {
   title: string;
   showings: Showing[];
@@ -175,14 +185,30 @@ function ShowingList({
   isFlashing: (id: string) => boolean;
   listingsById: Map<string, Listing>;
   onCancel?: (showing: Showing) => void;
+  /** Past and cancelled showings: greyed out, and the status badge says it all (no note). */
+  muted?: boolean;
+  collapsed?: boolean;
+  onToggle?: () => void;
 }) {
+  const panelId = `showings-${title.replace(/\W+/g, "-").toLowerCase()}`;
   return (
     <section className="space-y-3">
-      <h2 className="text-sm font-medium tracking-wide text-muted-foreground uppercase">{title}</h2>
-      {showings.length === 0 ? (
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-sm font-medium tracking-wide text-muted-foreground uppercase">
+          {title}
+          {onToggle ? <span className="ml-2 font-normal normal-case tracking-normal">({showings.length})</span> : null}
+        </h2>
+        {onToggle ? (
+          <Button variant="ghost" size="sm" onClick={onToggle} aria-expanded={!collapsed} aria-controls={panelId}>
+            {collapsed ? "Show" : "Hide"}
+            <ChevronDown className={cn("transition-transform", !collapsed && "rotate-180")} />
+          </Button>
+        ) : null}
+      </div>
+      {collapsed ? null : showings.length === 0 ? (
         <p className="text-sm text-muted-foreground">{empty}</p>
       ) : (
-        <Card className="gap-0 divide-y py-0">
+        <Card id={panelId} className="gap-0 divide-y py-0">
           {showings.map((s) => {
             const zonesDiffer = s.listingTimeZone !== userZone;
             const cancellable = onCancel && (s.status === "Requested" || s.status === "Confirmed");
@@ -192,7 +218,7 @@ function ShowingList({
                 className={cn(
                   "flex items-start gap-3 px-4 py-3 transition-colors duration-700 sm:items-center",
                   isFlashing(s.id) && "bg-amber-100/70",
-                  isPast(s) && "text-muted-foreground",
+                  muted && "text-muted-foreground",
                 )}
               >
                 <Link href={`/buyer/listings/${s.listingId}`} tabIndex={-1} aria-hidden>
@@ -216,7 +242,7 @@ function ShowingList({
                   <div className="flex items-center justify-between gap-3 sm:justify-end">
                     <div className="sm:text-right">
                       <StatusBadge status={s.status} />
-                      {!isPast(s) && STATUS_NOTE[s.status] ? (
+                      {!muted && STATUS_NOTE[s.status] ? (
                         <div className="mt-1 text-xs text-muted-foreground">{STATUS_NOTE[s.status]}</div>
                       ) : null}
                     </div>

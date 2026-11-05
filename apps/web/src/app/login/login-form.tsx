@@ -24,14 +24,38 @@ const DEMO_ACCOUNTS = [
   { email: "buyer@northstar.test", role: "Buyer", tenant: "Northstar Homes" },
 ];
 
+interface Credentials {
+  email: string;
+  password: string;
+  /** Which brokerage, when the same email and password exist in more than one. */
+  tenantSlug?: string;
+}
+
+interface TenantChoice {
+  slug: string;
+  name: string;
+}
+
+/** The API answers an ambiguous login with 409 and the candidate brokerages at the root of the problem. */
+function tenantChoices(problem: ProblemDetails): TenantChoice[] {
+  const raw = problem.tenants ?? problem.extensions?.tenants;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (t): t is TenantChoice =>
+      typeof t === "object" && t !== null && typeof t.slug === "string" && typeof t.name === "string",
+  );
+}
+
 export function LoginForm({ next, expired }: { next: string | null; expired: boolean }) {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Set after a 409: the same credentials, waiting for the user to pick a brokerage.
+  const [ambiguous, setAmbiguous] = useState<{ credentials: Credentials; tenants: TenantChoice[] } | null>(null);
 
-  async function signIn(credentials: { email: string; password: string }, key: string) {
+  async function signIn(credentials: Credentials, key: string) {
     setPending(key);
     setError(null);
     try {
@@ -42,11 +66,14 @@ export function LoginForm({ next, expired }: { next: string | null; expired: boo
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(
-          res.status === 401
-            ? "Email or password is incorrect."
-            : problemMessage(data as ProblemDetails, res.status),
-        );
+        const problem = data as ProblemDetails;
+        const tenants = res.status === 409 ? tenantChoices(problem) : [];
+        if (tenants.length > 0) {
+          setAmbiguous({ credentials, tenants });
+        } else {
+          setAmbiguous(null);
+          setError(res.status === 401 ? "Email or password is incorrect." : problemMessage(problem, res.status));
+        }
         setPending(null);
         return;
       }
@@ -75,6 +102,32 @@ export function LoginForm({ next, expired }: { next: string | null; expired: boo
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
         </Alert>
+      ) : null}
+      {ambiguous ? (
+        <Card role="group" aria-labelledby="which-brokerage">
+          <CardHeader>
+            <CardTitle id="which-brokerage">Which brokerage?</CardTitle>
+            <CardDescription>
+              {ambiguous.credentials.email} belongs to more than one brokerage. Pick the one to sign in to.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-2 sm:grid-cols-2">
+            {ambiguous.tenants.map((tenant) => (
+              <Button
+                key={tenant.slug}
+                variant="outline"
+                className="justify-start"
+                disabled={pending !== null}
+                onClick={() =>
+                  signIn({ ...ambiguous.credentials, tenantSlug: tenant.slug }, `tenant:${tenant.slug}`)
+                }
+              >
+                {pending === `tenant:${tenant.slug}` ? <Loader2 className="animate-spin" /> : null}
+                {tenant.name}
+              </Button>
+            ))}
+          </CardContent>
+        </Card>
       ) : null}
 
       <Card>

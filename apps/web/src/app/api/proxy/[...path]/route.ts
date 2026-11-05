@@ -12,6 +12,58 @@ const FORWARDED_RESPONSE_HEADERS = ["content-type", "location", "retry-after"];
 
 /** How long (ms) an EventSource should wait before retrying when the API is down. */
 const STREAM_RETRY_MS = 5000;
+/** How long (ms) the stand-in stream stays open while the API is down before the browser retries. */
+const STREAM_HOLD_MS = 30_000;
+
+const encoder = new TextEncoder();
+
+/**
+ * An SSE body that says nothing but stays open: closing it at once would make EventSource
+ * reconnect every `retry:` interval, each time looking like a fresh connection to the client.
+ * It closes when the browser goes away or after STREAM_HOLD_MS, so a down API costs one
+ * reconnect per half minute and the client never mistakes it for a live stream (no event arrives).
+ */
+function unavailableStream(signal: AbortSignal): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(`retry: ${STREAM_RETRY_MS}\n: API unavailable\n\n`));
+      const close = () => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", close);
+        try {
+          controller.close();
+        } catch {
+          // Already closed by the other path.
+        }
+      };
+      const timer = setTimeout(close, STREAM_HOLD_MS);
+      if (signal.aborted) close();
+      else signal.addEventListener("abort", close, { once: true });
+    },
+  });
+}
+
+/**
+ * Prefixes a live upstream stream with a `connected` event. EventSource cannot see the API's
+ * `: connected` comment, and `open` also fires for the stand-in above, so this is the client's
+ * only proof that it reached the real stream. It carries no `id`, so Last-Event-ID is untouched.
+ */
+function withConnectedEvent(body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode("event: connected\ndata: {}\n\n"));
+    },
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) controller.close();
+      else controller.enqueue(value);
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+}
 
 async function forward(request: NextRequest, ctx: RouteContext<"/api/proxy/[...path]">) {
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -49,7 +101,7 @@ async function forward(request: NextRequest, ctx: RouteContext<"/api/proxy/[...p
     if (wantsStream) {
       // A real SSE body (with a retry hint) keeps EventSource's built-in reconnect going; a JSON
       // error would make it give up for good.
-      return new Response(`retry: ${STREAM_RETRY_MS}\n: API unavailable\n\n`, {
+      return new Response(unavailableStream(request.signal), {
         status: 200,
         headers: {
           "content-type": "text/event-stream; charset=utf-8",
@@ -80,7 +132,8 @@ async function forward(request: NextRequest, ctx: RouteContext<"/api/proxy/[...p
   }
 
   const bodyless = upstream.status === 204 || upstream.status === 304 || request.method === "HEAD";
-  const response = new Response(bodyless ? null : upstream.body, {
+  const body = bodyless ? null : upstream.body;
+  const response = new Response(isStream && upstream.ok && body ? withConnectedEvent(body) : body, {
     status: upstream.status,
     headers: responseHeaders,
   });

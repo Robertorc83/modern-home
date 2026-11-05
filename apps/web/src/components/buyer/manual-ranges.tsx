@@ -62,18 +62,23 @@ export function ManualRanges({
         return (
           <div key={range.id} className="space-y-1">
             <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/20 p-2">
-              <Input
-                type="date"
-                aria-label="Date"
-                className="h-7 w-36 bg-background"
-                min={today}
-                value={range.date}
-                aria-invalid={Boolean(error) || undefined}
-                onChange={(e) => update(range.id, { date: e.target.value })}
-              />
-              <span className="flex-1 text-sm text-muted-foreground">
-                {range.date ? formatLocalDate(range.date, { weekday: "long" }) : null}
-              </span>
+              {/* The readable date is the primary text; the native picker (whose display format
+                  follows the browser locale, e.g. DD/MM) is kept for input but shown as secondary. */}
+              <label className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="truncate text-sm font-medium">
+                  {range.date ? formatLocalDate(range.date, { weekday: "long" }) : "Pick a date"}
+                </span>
+                <Input
+                  type="date"
+                  aria-label="Date"
+                  lang="en-US"
+                  className="h-7 w-36 bg-background text-xs text-muted-foreground"
+                  min={today}
+                  value={range.date}
+                  aria-invalid={Boolean(error) || undefined}
+                  onChange={(e) => update(range.id, { date: e.target.value })}
+                />
+              </label>
               <Button
                 type="button"
                 variant="ghost"

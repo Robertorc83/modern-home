@@ -44,10 +44,29 @@ export function summarizeRules(rules: ShowingRules | null | undefined): string {
   return parts.join(" · ");
 }
 
+/** Cards in a predictable order (by address, numbers compared numerically), so a new one is easy to find. */
+export function sortByAddress(listings: Listing[]): Listing[] {
+  return [...listings].sort(
+    (a, b) =>
+      a.address.localeCompare(b.address, "en", { numeric: true, sensitivity: "base" }) || a.id.localeCompare(b.id),
+  );
+}
+
+/** "8 listings · 1 off market · 2 drafts" */
+export function listingCountSummary(listings: Listing[]): string {
+  const off = listings.filter((l) => l.status === "Off").length;
+  const drafts = listings.filter((l) => l.status === "Draft").length;
+  const parts = [`${listings.length} ${listings.length === 1 ? "listing" : "listings"}`];
+  if (off > 0) parts.push(`${off} off market`);
+  if (drafts > 0) parts.push(`${drafts} ${drafts === 1 ? "draft" : "drafts"}`);
+  return parts.join(" · ");
+}
+
 /** The one attribute worth showing on a card: HOA for condos/townhouses, lot size for houses. */
 export function keyAttribute(listing: Listing): string | null {
   const a = listing.attributes ?? {};
-  if (typeof a.hoaMonthly === "number") return `HOA ${usd.format(a.hoaMonthly)}/mo`;
+  // "HOA $0/mo" says nothing useful on a card; the detail page lists it as "None".
+  if (typeof a.hoaMonthly === "number" && a.hoaMonthly > 0) return `HOA ${usd.format(a.hoaMonthly)}/mo`;
   if (typeof a.lotSizeSqft === "number") return `${a.lotSizeSqft.toLocaleString()} sq ft lot`;
   return null;
 }
@@ -70,7 +89,7 @@ function humanizeKey(key: string): string {
 function formatAttributeValue(key: string, value: unknown): string {
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (typeof value === "number") {
-    if (key === "hoaMonthly") return usd.format(value);
+    if (key === "hoaMonthly") return value > 0 ? usd.format(value) : "None";
     if (key === "lotSizeSqft" || key === "sqft") return `${value.toLocaleString()} sq ft`;
     if (key === "yearBuilt") return String(value);
     return value.toLocaleString();

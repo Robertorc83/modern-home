@@ -28,9 +28,12 @@ const NEAR_SUGGESTIONS = ["Denver", "LoDo", "Cherry Creek", "Austin", "Toronto"]
 export function Filters({
   value,
   onChange,
+  nearError,
 }: {
   value: SearchFilters;
   onChange: (value: SearchFilters) => void;
+  /** The matcher's objection to `near` (an unknown place), shown under the field. */
+  nearError?: string | null;
 }) {
   const set = <K extends keyof SearchFilters>(key: K, v: SearchFilters[K]) =>
     onChange({ ...value, [key]: v });
@@ -44,6 +47,8 @@ export function Filters({
           list="near-suggestions"
           placeholder="Denver, LoDo, Toronto…"
           value={value.near}
+          aria-invalid={nearError ? true : undefined}
+          aria-describedby={nearError ? "near-error" : undefined}
           onChange={(e) => set("near", e.target.value)}
         />
         <datalist id="near-suggestions">
@@ -51,6 +56,11 @@ export function Filters({
             <option key={n} value={n} />
           ))}
         </datalist>
+        {nearError ? (
+          <p id="near-error" role="alert" className="text-xs text-destructive">
+            {nearError}
+          </p>
+        ) : null}
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="radius">Radius</Label>

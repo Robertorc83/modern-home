@@ -6,13 +6,16 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useResource } from "@/hooks/use-resource";
-import { api, toastError } from "@/lib/api";
+import { toast } from "sonner";
+import { ApiError, api, toastError } from "@/lib/api";
 import { formatLocalRange, formatLocalTime } from "@/lib/time";
 import { shortDay } from "@/lib/format";
 import type { LocalRange, ParsedAvailability } from "@/lib/types";
 import { ProviderBadge } from "./provider-badge";
 
 const PLACEHOLDER = "weekday evenings after 6 except Thursday, Saturday morning";
+/** Ranges visible in the review list before it scrolls. */
+const VISIBLE_RANGES = 12;
 
 export function AiAvailability({
   timeZone,
@@ -39,7 +42,12 @@ export function AiAvailability({
     try {
       onParsed(await api.parseAvailability(text.trim(), timeZone));
     } catch (err) {
-      toastError(err);
+      if (err instanceof ApiError && err.status === 429) {
+        // Per-user limit: say so by the problem's title; the text stays so the user can retry later.
+        toast.error(err.problem.title || "Too many requests", { description: err.problem.detail });
+      } else {
+        toastError(err);
+      }
     } finally {
       setParsing(false);
     }
@@ -111,13 +119,18 @@ export function AiAvailability({
           ) : null}
 
           <div className="space-y-1">
-            <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-              Review the dates ({parsed.ranges.length})
-            </p>
+            <div className="flex items-baseline justify-between gap-2">
+              <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Review the dates</p>
+              <p className="text-xs text-muted-foreground">
+                {parsed.ranges.length} {parsed.ranges.length === 1 ? "date" : "dates"}
+                {parsed.ranges.length > VISIBLE_RANGES ? " · scroll for the rest" : ""}
+              </p>
+            </div>
             {parsed.ranges.length === 0 ? (
               <p className="text-sm text-muted-foreground">No concrete times. Try rephrasing.</p>
             ) : (
-              <ul className="max-h-56 space-y-1 overflow-y-auto pr-1">
+              // Tall enough for VISIBLE_RANGES rows (28px + 4px gap each) before it scrolls.
+              <ul className="max-h-96 space-y-1 overflow-y-auto pr-1">
                 {parsed.ranges.map((range, i) => (
                   <li
                     key={`${range.start}-${range.end}`}

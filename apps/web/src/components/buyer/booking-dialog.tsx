@@ -65,11 +65,14 @@ export function BookingDialog({
   searchTimeZone,
   onClose,
   onBooked,
+  onSlotsChanged,
 }: {
   target: BookingTarget | null;
   searchTimeZone: string;
   onClose: () => void;
   onBooked: (showing: Showing) => void;
+  /** The slot was taken by someone else (hold or booking conflict): the caller's slot list is stale. */
+  onSlotsChanged?: () => void;
 }) {
   const [slot, setSlot] = useState<Slot | null>(target?.slot ?? null);
   const [holdState, setHoldState] = useState<HoldState>({ kind: "holding" });
@@ -78,6 +81,10 @@ export function BookingDialog({
   const [bookError, setBookError] = useState<{ message: string; alternatives: Slot[] } | null>(null);
   const booked = useRef(false);
   const router = useRouter();
+  const slotsChanged = useRef(onSlotsChanged);
+  useEffect(() => {
+    slotsChanged.current = onSlotsChanged;
+  });
 
   // Reset when a new chip is clicked.
   const [prevTarget, setPrevTarget] = useState(target);
@@ -106,6 +113,7 @@ export function BookingDialog({
           if (!active) return null;
           if (err instanceof ApiError && err.status === 409) {
             setHoldState({ kind: "conflict", message: err.message, alternatives: err.alternatives });
+            slotsChanged.current?.();
           } else if (err instanceof ApiError && (err.status === 405 || err.status === 501)) {
             // Holds are not supported by this API; booking still works.
             setHoldState({ kind: "unheld" });
@@ -147,6 +155,7 @@ export function BookingDialog({
     } catch (err) {
       if (err instanceof ApiError && (err.status === 409 || err.status === 422)) {
         setBookError({ message: err.message, alternatives: err.alternatives });
+        if (err.status === 409) onSlotsChanged?.();
       } else {
         setBookError({ message: err instanceof Error ? err.message : "Booking failed.", alternatives: [] });
       }
@@ -161,8 +170,14 @@ export function BookingDialog({
       ? holdState.alternatives
       : [];
   const zonesDiffer = listing ? listing.timeZone !== searchTimeZone : false;
+  // A booking error with alternatives means this slot is gone: pick another. One without (network,
+  // 5xx) is transient, so the hold is still ours and the same slot can be confirmed again.
+  const retryable = bookError !== null && bookError.alternatives.length === 0;
   const canConfirm =
-    !booking && !expired && (holdState.kind === "held" || holdState.kind === "unheld") && !bookError;
+    !booking &&
+    !expired &&
+    (holdState.kind === "held" || holdState.kind === "unheld") &&
+    (!bookError || retryable);
 
   return (
     // Closing while the booking request is in flight would release the hold under it; wait instead.
@@ -206,7 +221,14 @@ export function BookingDialog({
             {bookError ? (
               <Alert variant="destructive">
                 <AlertTitle>Couldn&apos;t book this slot</AlertTitle>
-                <AlertDescription>{bookError.message}</AlertDescription>
+                <AlertDescription className={retryable ? "flex items-center justify-between gap-2" : undefined}>
+                  <span>{bookError.message}</span>
+                  {retryable ? (
+                    <Button size="sm" variant="outline" onClick={() => setBookError(null)}>
+                      Try again
+                    </Button>
+                  ) : null}
+                </AlertDescription>
               </Alert>
             ) : null}
 
