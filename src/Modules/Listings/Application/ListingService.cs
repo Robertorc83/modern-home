@@ -123,6 +123,9 @@ public sealed class ListingService : IListingCatalog
         if (i.Location is null) problems.Add("location is required.");
         else if (i.Location.Lat is < -90 or > 90 || i.Location.Lng is < -180 or > 180) problems.Add("location is out of range.");
         if (i.ShowingRules is not null) problems.AddRange(i.ShowingRules.Validate());
+        if (i.Photos is { Count: > 12 }) problems.Add("At most 12 photos.");
+        foreach (var url in i.Photos ?? [])
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var u) || u.Scheme != Uri.UriSchemeHttps) problems.Add($"Photo '{url}' must be an https URL.");
         return problems.Count > 0 ? Error.Validation(string.Join(" ", problems)) : null;
     }
 

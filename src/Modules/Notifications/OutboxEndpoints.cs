@@ -23,7 +23,7 @@ public static class OutboxEndpoints
                 outbox = outbox.Select(m => new
                 {
                     m.Id, m.Type, m.OccurredAt, m.ProcessedAt, m.Attempts, m.LastError,
-                    to = m.Payload.GetValue("To", "").ToString(), subject = m.Payload.GetValue("Subject", "").ToString(),
+                    to = m.Payload.GetValue("to", "").ToString(), subject = m.Payload.GetValue("subject", "").ToString(),
                 }),
                 emails = emails.Select(e => new { e.Id, e.To, e.Subject, e.Body, e.Transport, e.SentAt }),
             });

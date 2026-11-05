@@ -90,7 +90,28 @@ public sealed class DemoSeed(IServiceProvider root, ITenantDirectory tenants, Cr
     private static Dictionary<string, JsonElement> Attrs(object o) =>
         JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(JsonSerializer.Serialize(o))!;
 
-    private static IEnumerable<(string Key, string Owner, ListingInput Input)> Listings()
+    private static readonly Dictionary<string, string[]> PhotoIds = new()
+    {
+        ["lodo"] = ["1545324418-cc1a3fa10c00", "1502672260266-1c1ef2d93688", "1484154218962-a197022b5858"],
+        ["highlands"] = ["1568605114967-8130f3a36994", "1493809842364-78817add7ffb", "1600607687939-ce8a6c25118c"],
+        ["rino"] = ["1600596542815-ffad4c1539a9", "1522708323590-d24dbb6b0267"],
+        ["cherry-creek"] = ["1560448204-e02f11c3d0e2", "1554995207-c18c203602cb"],
+        ["wash-park"] = ["1512917774080-9991f1c4c750", "1583608205776-bfd35f0d9f83", "1600047509807-ba8f99d2cdde"],
+        ["soco"] = ["1600585154340-be6161a56a0c", "1502672260266-1c1ef2d93688"],
+        ["hyde-park"] = ["1570129477492-45c003edd2be", "1493809842364-78817add7ffb"],
+        ["liberty"] = ["1522708323590-d24dbb6b0267", "1484154218962-a197022b5858"],
+        ["annex"] = ["1564013799919-ab600027ffc6", "1600607687939-ce8a6c25118c", "1583608205776-bfd35f0d9f83"],
+        ["leslieville"] = ["1580587771525-78b9dba3b914", "1554995207-c18c203602cb"],
+    };
+
+    /// <summary>Demo photos (Unsplash). Real uploads go to S3 through presigned URLs; see docs/aws-deployment.md.</summary>
+    private static List<string> Photos(string key) =>
+        PhotoIds[key].Select(id => $"https://images.unsplash.com/photo-{id}?w=1200&q=70&auto=format&fit=crop").ToList();
+
+    private static IEnumerable<(string Key, string Owner, ListingInput Input)> Listings() =>
+        RawListings().Select(x => { x.Input.Photos = Photos(x.Key); return x; });
+
+    private static IEnumerable<(string Key, string Owner, ListingInput Input)> RawListings()
     {
         ListingInput L(string address, string city, string hood, decimal price, int beds, decimal baths, PropertyType type, object attrs,
             string tz, double lat, double lng, ShowingRules rules, string description) => new()
