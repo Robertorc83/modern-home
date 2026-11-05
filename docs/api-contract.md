@@ -96,7 +96,7 @@ Response:
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/showings/holds` | Buyer `{ listingId, slotStart, timeZone? }` → `{ id, listingId, slotStartUtc, expiresAt }`. 409 (with `alternatives`) if held or booked by someone else; 422 if not an open slot |
+| POST | `/showings/holds` | Buyer `{ listingId, slotStart, timeZone? }` → `{ id, listingId, slotStartUtc, expiresAt }` (5 minutes, TTL). One live hold per buyer: a new hold releases the buyer's previous one; holding the same slot again extends it. 409 (with `alternatives`) if held or booked by someone else; 422 if not an open slot |
 | DELETE | `/showings/holds/{id}` | Buyer releases own hold. 204 |
 | POST | `/showings` | Buyer `{ listingId, slotStart, timeZone? }` → `showing` (201). 409 ProblemDetails with `alternatives: [slot]` (root level, labels in `timeZone`) when taken or overlapping. 422 when not an open slot |
 | POST | `/showings/{id}/confirm` | Agent owner |
