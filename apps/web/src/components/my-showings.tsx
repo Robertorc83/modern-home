@@ -20,6 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useDebouncedCallback } from "@/hooks/use-debounced";
 import { useFlash } from "@/hooks/use-flash";
 import { useListingIndex } from "@/hooks/use-listing-index";
 import { useResource } from "@/hooks/use-resource";
@@ -45,22 +46,26 @@ export function MyShowings() {
   const [cancelling, setCancelling] = useState<Showing | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const streamState = useShowingStream(async (event) => {
-    const before = showings.data?.find((s) => s.id === event.showingId);
-    const latest = await showings.reload();
-    const after = latest?.find((s) => s.id === event.showingId);
-    if (!after) return;
-    flash(after.id);
-    if (
-      before &&
-      before.status !== after.status &&
-      (after.status === "Confirmed" || after.status === "Declined")
-    ) {
-      toast[after.status === "Confirmed" ? "success" : "warning"](`Showing ${after.status.toLowerCase()}`, {
-        description: `${after.listingAddress} · ${listingTimeLabel(after)}`,
-      });
-    }
-  });
+  // Events can arrive in bursts; one reload after the last of them is enough to reconcile the list.
+  const reloadSoon = useDebouncedCallback(() => void showings.reload(), 150);
+  const streamState = useShowingStream(
+    (event) => {
+      // Toast and flash from the event payload itself, so a burst of events drops none of them.
+      const before = showings.data?.find((s) => s.id === event.showingId);
+      flash(event.showingId);
+      if (
+        before &&
+        before.status !== event.status &&
+        (event.status === "Confirmed" || event.status === "Declined")
+      ) {
+        toast[event.status === "Confirmed" ? "success" : "warning"](`Showing ${event.status.toLowerCase()}`, {
+          description: `${before.listingAddress} · ${listingTimeLabel(before)}`,
+        });
+      }
+      reloadSoon();
+    },
+    () => void showings.reload(),
+  );
 
   async function cancel(showing: Showing) {
     setBusy(true);

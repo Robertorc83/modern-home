@@ -44,15 +44,6 @@ export function summarizeRules(rules: ShowingRules | null | undefined): string {
   return parts.join(" · ");
 }
 
-export function listingAttributesSummary(listing: Listing): string | null {
-  const a = listing.attributes ?? {};
-  const parts: string[] = [];
-  if (typeof a.hoaMonthly === "number") parts.push(`HOA ${usd.format(a.hoaMonthly)}/mo`);
-  if (typeof a.floor === "number") parts.push(`Floor ${a.floor}`);
-  if (typeof a.lotSizeSqft === "number") parts.push(`${a.lotSizeSqft.toLocaleString()} sqft lot`);
-  return parts.length ? parts.join(" · ") : null;
-}
-
 /** The one attribute worth showing on a card: HOA for condos/townhouses, lot size for houses. */
 export function keyAttribute(listing: Listing): string | null {
   const a = listing.attributes ?? {};

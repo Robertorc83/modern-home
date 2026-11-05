@@ -90,7 +90,7 @@ export function AppHeader() {
             {ROLE_LABEL[user.role]}
           </Badge>
           <span className="hidden text-sm text-muted-foreground lg:inline">{user.name}</span>
-          <Button variant="ghost" size="sm" onClick={signOut} disabled={signingOut}>
+          <Button variant="ghost" size="sm" onClick={signOut} disabled={signingOut} aria-label="Sign out">
             <LogOut />
             <span className="hidden sm:inline">Sign out</span>
           </Button>

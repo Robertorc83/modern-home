@@ -99,6 +99,8 @@ export interface Listing {
   timeZone: string;
   location: { lat: number; lng: number } | null;
   showingRules: ShowingRules | null;
+  /** Incremented on every save; sent back on PUT so a stale edit gets a 409 instead of a lost update. */
+  version?: number;
 }
 
 export type ListingInput = Omit<Listing, "id" | "ownerUserId" | "ownerName">;

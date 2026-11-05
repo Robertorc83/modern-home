@@ -87,6 +87,7 @@ export function WeeklyGrid({
                       label={`${day} window end`}
                       value={w.end}
                       invalid={Boolean(error)}
+                      includeMidnight
                       onChange={(end) => update(index, { end })}
                     />
                     <Button

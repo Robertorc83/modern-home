@@ -38,10 +38,6 @@ export function formatInZone(
   return new Intl.DateTimeFormat("en-US", { ...options, timeZone }).format(date);
 }
 
-export function formatTimeInZone(instant: string, timeZone: string): string {
-  return formatInZone(instant, timeZone, { hour: "numeric", minute: "2-digit", timeZoneName: "short" });
-}
-
 export function formatRelative(instant: string | null | undefined): string {
   if (!instant) return "Never";
   const date = new Date(instant);
@@ -128,8 +124,4 @@ export function quarterHours(includeMidnight = false): string[] {
 export function toMinutes(hhmm: string): number {
   const [h, m] = hhmm.split(":").map(Number);
   return h * 60 + m;
-}
-
-export function zoneShortName(timeZone: string): string {
-  return timeZone.split("/").pop()?.replace(/_/g, " ") ?? timeZone;
 }

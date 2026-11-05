@@ -20,6 +20,8 @@ import { cn } from "@/lib/utils";
 import type { Listing } from "@/lib/types";
 import { ListingPhoto } from "./listing-photo";
 
+const COLLAPSED_DAYS = 6;
+
 const BACK: Record<string, { href: string; label: string }> = {
   Buyer: { href: "/buyer", label: "Find showings" },
   Agent: { href: "/agent/listings", label: "My listings" },
@@ -108,6 +110,8 @@ function DetailBody({ listing }: { listing: Listing }) {
     return api.slots(listing.id, { from: from.toISOString(), to: to.toISOString(), timeZone });
   }, [listing.id, timeZone, horizon]);
   const zonesDiffer = listing.timeZone !== timeZone;
+  const [allDays, setAllDays] = useState(false);
+  const dayCount = slots.data?.days.length ?? 0;
   const facts = [
     { label: "Price", value: formatPrice(listing.price, listing.timeZone) },
     { label: "Beds / baths", value: formatBedsBaths(listing) },
@@ -191,12 +195,24 @@ function DetailBody({ listing }: { listing: Listing }) {
                 No open times in the next {horizon} days. Check back soon.
               </p>
             ) : (
-              <SlotDays
-                days={slots.data.days}
-                maxDays={6}
-                showListingTime={zonesDiffer}
-                onSelect={isBuyer ? (slot) => setBooking({ listing, slot }) : undefined}
-              />
+              <>
+                <SlotDays
+                  days={slots.data.days}
+                  maxDays={allDays ? undefined : COLLAPSED_DAYS}
+                  showListingTime={zonesDiffer}
+                  onSelect={isBuyer ? (slot) => setBooking({ listing, slot }) : undefined}
+                />
+                {dayCount > COLLAPSED_DAYS ? (
+                  <Button
+                    variant="link"
+                    size="sm"
+                    className="h-auto px-0"
+                    onClick={() => setAllDays((a) => !a)}
+                  >
+                    {allDays ? "Show fewer days" : `Show all ${dayCount} days`}
+                  </Button>
+                ) : null}
+              </>
             )}
           </CardContent>
         </Card>

@@ -22,7 +22,11 @@ export function rangeError(range: ManualRange, today: string): string | null {
 }
 
 export function toLocalRanges(ranges: ManualRange[]): LocalRange[] {
-  return ranges.map((r) => ({ start: `${r.date}T${r.start}`, end: `${r.date}T${r.end}` }));
+  // "24:00" (end of day) is not a valid local time; it is midnight at the start of the next day.
+  return ranges.map((r) => ({
+    start: `${r.date}T${r.start}`,
+    end: r.end === "24:00" ? `${addDays(r.date, 1)}T00:00` : `${r.date}T${r.end}`,
+  }));
 }
 
 let nextId = 1;
@@ -87,7 +91,12 @@ export function ManualRanges({
                   onChange={(start) => update(range.id, { start })}
                 />
                 <span className="text-sm text-muted-foreground">to</span>
-                <TimeSelect label="To" value={range.end} onChange={(end) => update(range.id, { end })} />
+                <TimeSelect
+                  label="To"
+                  value={range.end}
+                  includeMidnight
+                  onChange={(end) => update(range.id, { end })}
+                />
               </div>
             </div>
             {error ? <p className="text-xs text-destructive">{error}</p> : null}

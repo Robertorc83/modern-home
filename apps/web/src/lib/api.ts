@@ -68,6 +68,22 @@ function buildUrl(path: string, query?: Query): string {
 
 let redirectingToLogin = false;
 
+/**
+ * Sends the browser to /login (full navigation, so all client state of the old session is dropped)
+ * and remembers where the user was. Returns a promise that never settles: callers are unloading.
+ */
+export function redirectToLogin(): Promise<never> {
+  if (!redirectingToLogin) {
+    redirectingToLogin = true;
+    const login = new URL("/login", window.location.origin);
+    login.searchParams.set("expired", "1");
+    const here = window.location.pathname + window.location.search;
+    if (here !== "/" && !here.startsWith("/login")) login.searchParams.set("next", here);
+    window.location.assign(login);
+  }
+  return new Promise<never>(() => undefined);
+}
+
 async function request<T>(method: string, path: string, body?: unknown, query?: Query): Promise<T> {
   let res: Response;
   try {
@@ -81,12 +97,9 @@ async function request<T>(method: string, path: string, body?: unknown, query?: 
     throw new ApiError(0, { title: "Network error", detail: "Could not reach the server." });
   }
 
-  if (res.status === 401 && !redirectingToLogin) {
-    // Session expired or revoked: the proxy already cleared the cookie.
-    redirectingToLogin = true;
-    // A full navigation (not router.push) also drops all client state of the old session.
-    window.location.assign(new URL("/login?expired=1", window.location.origin));
-  }
+  // Session expired or revoked: the proxy already cleared the cookie. Nothing should render an
+  // error for this, so the promise stays pending while the page navigates away.
+  if (res.status === 401) return redirectToLogin();
 
   if (res.status === 204) return undefined as T;
 
@@ -138,11 +151,12 @@ export const api = {
   // Matching
   match: (body: MatchRequest) => api.post<MatchResponse>("/match", body),
 
-  // Scheduling
-  hold: (listingId: string, slotStart: string) =>
-    api.post<SlotHold>("/showings/holds", { listingId, slotStart }),
+  // Scheduling. `timeZone` is the buyer's zone, so 409 alternatives come back labelled in it.
+  hold: (listingId: string, slotStart: string, timeZone: string) =>
+    api.post<SlotHold>("/showings/holds", { listingId, slotStart, timeZone }),
   releaseHold: (id: string) => api.del(`/showings/holds/${encodeURIComponent(id)}`),
-  book: (listingId: string, slotStart: string) => api.post<Showing>("/showings", { listingId, slotStart }),
+  book: (listingId: string, slotStart: string, timeZone: string) =>
+    api.post<Showing>("/showings", { listingId, slotStart, timeZone }),
   confirmShowing: (id: string) => api.post<Showing>(`/showings/${encodeURIComponent(id)}/confirm`),
   declineShowing: (id: string) => api.post<Showing>(`/showings/${encodeURIComponent(id)}/decline`),
   cancelShowing: (id: string) => api.post<Showing>(`/showings/${encodeURIComponent(id)}/cancel`),

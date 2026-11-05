@@ -1,5 +1,7 @@
 import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
+import { rejectCrossSite } from "@/lib/server/csrf";
+import { forwardedHeaders } from "@/lib/server/forwarded";
 import { API_URL, SESSION_COOKIE } from "@/lib/server/session";
 
 // Never cache, never buffer: this handler also streams Server-Sent Events.
@@ -8,11 +10,20 @@ export const dynamic = "force-dynamic";
 const FORWARDED_REQUEST_HEADERS = ["accept", "content-type", "last-event-id"];
 const FORWARDED_RESPONSE_HEADERS = ["content-type", "location", "retry-after"];
 
+/** How long (ms) an EventSource should wait before retrying when the API is down. */
+const STREAM_RETRY_MS = 5000;
+
 async function forward(request: NextRequest, ctx: RouteContext<"/api/proxy/[...path]">) {
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    const rejected = rejectCrossSite(request);
+    if (rejected) return rejected;
+  }
+
   const { path } = await ctx.params;
   const target = `${API_URL}/${path.map(encodeURIComponent).join("/")}${request.nextUrl.search}`;
+  const wantsStream = request.headers.get("accept")?.includes("text/event-stream") ?? false;
 
-  const headers = new Headers();
+  const headers = new Headers(forwardedHeaders(request));
   for (const name of FORWARDED_REQUEST_HEADERS) {
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
@@ -32,9 +43,23 @@ async function forward(request: NextRequest, ctx: RouteContext<"/api/proxy/[...p
       // Closing the browser's EventSource aborts the upstream stream too.
       signal: request.signal,
     });
-  } catch {
+  } catch (err) {
+    if (request.signal.aborted) return new Response(null, { status: 499 });
+    console.error(`Could not reach the API at ${target}`, err);
+    if (wantsStream) {
+      // A real SSE body (with a retry hint) keeps EventSource's built-in reconnect going; a JSON
+      // error would make it give up for good.
+      return new Response(`retry: ${STREAM_RETRY_MS}\n: API unavailable\n\n`, {
+        status: 200,
+        headers: {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache, no-transform",
+          "x-accel-buffering": "no",
+        },
+      });
+    }
     return NextResponse.json(
-      { title: "API unavailable", status: 502, detail: `Could not reach the API at ${API_URL}.` },
+      { title: "API unavailable", status: 502, detail: "The API is not reachable right now." },
       { status: 502 },
     );
   }

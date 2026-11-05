@@ -28,7 +28,6 @@ import { api, toastError } from "@/lib/api";
 import { formatRelative } from "@/lib/time";
 import type { AccessToken, CreatedAccessToken } from "@/lib/types";
 
-const MCP_URL = process.env.NEXT_PUBLIC_MCP_URL ?? "http://localhost:5080/mcp";
 const TOKEN_PLACEHOLDER = "<token>";
 
 const EXAMPLE_PROMPTS = {
@@ -36,17 +35,17 @@ const EXAMPLE_PROMPTS = {
   Agent: "Show my pending showing requests and confirm the earliest one.",
 };
 
-function claudeCodeCommand(token: string) {
-  return `claude mcp add --transport http showings ${MCP_URL} --header "Authorization: Bearer ${token}"`;
+function claudeCodeCommand(mcpUrl: string, token: string) {
+  return `claude mcp add --transport http showings ${mcpUrl} --header "Authorization: Bearer ${token}"`;
 }
 
-function desktopConfig(token: string) {
+function desktopConfig(mcpUrl: string, token: string) {
   return JSON.stringify(
     {
       mcpServers: {
         showings: {
           command: "npx",
-          args: ["mcp-remote", MCP_URL, "--header", `Authorization: Bearer ${token}`],
+          args: ["mcp-remote", mcpUrl, "--header", `Authorization: Bearer ${token}`],
         },
       },
     },
@@ -55,7 +54,8 @@ function desktopConfig(token: string) {
   );
 }
 
-export function AiAssistantSettings() {
+/** `mcpUrl` is resolved by the server page at request time from PUBLIC_MCP_URL. */
+export function AiAssistantSettings({ mcpUrl }: { mcpUrl: string }) {
   const user = useUser();
   const tokens = useResource(() => api.tokens());
   const [name, setName] = useState("Claude Code");
@@ -222,7 +222,7 @@ export function AiAssistantSettings() {
             ) : null}
             <div className="space-y-2">
               <p className="text-sm font-medium">Claude Code</p>
-              <CodeBlock label="Terminal" code={claudeCodeCommand(tokenValue)} />
+              <CodeBlock label="Terminal" code={claudeCodeCommand(mcpUrl, tokenValue)} />
             </div>
             <div className="space-y-2">
               <p className="text-sm font-medium">Claude Desktop</p>
@@ -230,7 +230,7 @@ export function AiAssistantSettings() {
                 Add to <code className="font-mono">claude_desktop_config.json</code>, then restart Claude
                 Desktop.
               </p>
-              <CodeBlock label="claude_desktop_config.json" code={desktopConfig(tokenValue)} />
+              <CodeBlock label="claude_desktop_config.json" code={desktopConfig(mcpUrl, tokenValue)} />
             </div>
             <div className="space-y-2">
               <p className="text-sm font-medium">Then try</p>

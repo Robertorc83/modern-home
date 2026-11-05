@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { problemMessage } from "@/lib/api";
+import { safeNextPath } from "@/lib/utils";
 import type { ProblemDetails } from "@/lib/types";
 
 const DEMO_PASSWORD = "demo1234";
@@ -49,7 +50,8 @@ export function LoginForm({ next, expired }: { next: string | null; expired: boo
         setPending(null);
         return;
       }
-      router.replace(next ?? (data as { home: string }).home);
+      // Re-checked here so a same-origin path is the only thing we ever navigate to after login.
+      router.replace(safeNextPath(next) ?? (data as { home: string }).home);
       router.refresh();
     } catch {
       setError("Could not reach the server.");

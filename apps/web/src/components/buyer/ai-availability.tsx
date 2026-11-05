@@ -31,12 +31,13 @@ export function AiAvailability({
   const [parsing, setParsing] = useState(false);
   const provider = useResource(() => api.aiProvider());
 
+  const empty = text.trim() === "";
+
   async function parse() {
-    const input = text.trim() || PLACEHOLDER;
-    if (!text.trim()) setText(PLACEHOLDER);
+    if (empty) return;
     setParsing(true);
     try {
-      onParsed(await api.parseAvailability(input, timeZone));
+      onParsed(await api.parseAvailability(text.trim(), timeZone));
     } catch (err) {
       toastError(err);
     } finally {
@@ -62,10 +63,23 @@ export function AiAvailability({
           }
         }}
       />
-      <Button type="button" variant="outline" onClick={parse} disabled={parsing}>
-        {parsing ? <Loader2 className="animate-spin" /> : <Wand2 />}
-        Parse
-      </Button>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button type="button" variant="outline" onClick={parse} disabled={parsing || empty}>
+          {parsing ? <Loader2 className="animate-spin" /> : <Wand2 />}
+          Parse
+        </Button>
+        {empty ? (
+          <Button
+            type="button"
+            variant="link"
+            size="sm"
+            className="h-auto px-0"
+            onClick={() => setText(PLACEHOLDER)}
+          >
+            Try an example
+          </Button>
+        ) : null}
+      </div>
 
       {parsed ? (
         <div className="space-y-3 rounded-lg border bg-muted/30 p-3">

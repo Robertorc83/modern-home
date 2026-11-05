@@ -14,8 +14,8 @@ Sign in with a one-click demo account on `/login` (password `demo1234` for every
 | Variable | Where | Default | Purpose |
 |---|---|---|---|
 | `API_URL` | server, runtime | `http://localhost:5080` (`http://api:8080` in Docker) | ASP.NET Core API base URL |
-| `NEXT_PUBLIC_MCP_URL` | browser, **build time** | `http://localhost:5080/mcp` | URL shown on the "Connect an AI assistant" page |
-| `COOKIE_SECURE` | server, runtime | unset | Set to `true` behind HTTPS |
+| `PUBLIC_MCP_URL` | server, runtime | `http://localhost:5080/mcp` | MCP URL shown on the "Connect an AI assistant" page (read per request, so one image serves any deployment) |
+| `COOKIE_SECURE` | server, runtime | unset | `true` forces the `Secure` cookie flag. Otherwise it is set automatically in production when the request arrived over HTTPS (`x-forwarded-proto: https`), and left off over plain HTTP (the Docker demo) |
 
 Docker: `docker build -t hss-web . && docker run -p 3000:3000 -e API_URL=http://host.docker.internal:5080 hss-web`.
 
@@ -24,10 +24,16 @@ Docker: `docker build -t hss-web . && docker run -p 3000:3000 -e API_URL=http://
 The browser never sees the JWT.
 
 - `POST /api/auth/login` and `/api/auth/register` call the API, then store the token in an
-  `httpOnly`, `SameSite=Lax` cookie (`hss_session`). `POST /api/auth/logout` clears it.
+  `httpOnly`, `SameSite=Lax` cookie (`hss_session`). `POST /api/auth/logout` clears it. They require
+  a JSON body and reject cross-site requests (`Sec-Fetch-Site: cross-site` or a foreign `Origin`);
+  non-GET proxy requests get the same check.
 - `/api/proxy/[...path]` forwards every other call to the API with `Authorization: Bearer <cookie>`,
-  passing status and ProblemDetails bodies through. It streams `text/event-stream` unbuffered
+  passing status and ProblemDetails bodies through. Both it and the auth routes send
+  `X-Forwarded-For` (the client IP from an upstream proxy's `x-forwarded-for`/`x-real-ip`, omitted
+  when unknown) and `X-Forwarded-Proto`, so the API can rate-limit per client. It streams `text/event-stream` unbuffered
   (and forwards `Last-Event-ID`), which powers the live inbox from the API's MongoDB change stream.
+  While the API is unreachable it answers stream requests with an empty SSE body carrying a
+  `retry:` hint, and the client hook reconnects with backoff and refetches once it is back.
 - `src/proxy.ts` (Next 16's middleware) redirects to `/login` when there is no cookie. Server
   layouts resolve the user via `/auth/me` and enforce the role per section; a 401 clears the cookie.
 

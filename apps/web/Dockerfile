@@ -8,9 +8,6 @@ RUN npm ci
 FROM node:22-alpine AS builder
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
-# Public (browser-side) values are inlined at build time.
-ARG NEXT_PUBLIC_MCP_URL=http://localhost:5080/mcp
-ENV NEXT_PUBLIC_MCP_URL=$NEXT_PUBLIC_MCP_URL
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build

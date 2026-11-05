@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 import { ListingThumb } from "@/components/listing/listing-thumb";
@@ -13,6 +13,7 @@ import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useUser } from "@/components/user-context";
+import { useDebouncedCallback } from "@/hooks/use-debounced";
 import { useFlash } from "@/hooks/use-flash";
 import { useListingIndex } from "@/hooks/use-listing-index";
 import { useResource } from "@/hooks/use-resource";
@@ -52,23 +53,40 @@ export function ShowingsInbox({
 }) {
   const [tab, setTab] = useState<Tab>("Requested");
   const [busy, setBusy] = useState<string | null>(null);
+  // Requests that arrived live while another tab was open; shown as a badge instead of switching tabs.
+  const [unseenRequests, setUnseenRequests] = useState(0);
   const showings = useResource(() => api.inbox());
   const { isFlashing, flash } = useFlash();
   const listingsById = useListingIndex(useUser().role);
 
-  const streamState = useShowingStream(async (event) => {
-    const latest = await showings.reload();
-    flash(event.showingId);
-    if (event.operation?.toLowerCase() === "insert") {
-      const s = latest?.find((x) => x.id === event.showingId);
-      toast.info("New showing request", {
-        description: s
-          ? `${s.buyerName} · ${s.listingAddress} · ${listingTimeLabel(s)}`
-          : [event.buyerName, event.listingAddress].filter(Boolean).join(" · ") || undefined,
-      });
-      if (s && s.status === "Requested") setTab((t) => (t === "Confirmed" ? "Requested" : t));
-    }
-  });
+  // Events can arrive in bursts; one reload after the last of them is enough to reconcile the list.
+  const reloadSoon = useDebouncedCallback(() => void showings.reload(), 150);
+  const streamState = useShowingStream(
+    (event) => {
+      // Toast and flash from the event payload itself, so a burst of events drops none of them.
+      flash(event.showingId);
+      if (event.operation?.toLowerCase() === "insert") {
+        toast.info("New showing request", {
+          description: [event.buyerName, event.listingAddress].filter(Boolean).join(" · ") || undefined,
+        });
+        if (event.status === "Requested" && tab !== "Requested") setUnseenRequests((n) => n + 1);
+      }
+      reloadSoon();
+    },
+    () => void showings.reload(),
+  );
+
+  function changeTab(next: Tab) {
+    setTab(next);
+    if (next === "Requested") setUnseenRequests(0);
+  }
+
+  // "Requested 3 minutes ago" drifts while the page sits open; re-render it now and then.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setTick((t) => t + 1), 30_000);
+    return () => clearInterval(timer);
+  }, []);
 
   async function respond(showing: Showing, action: "confirm" | "decline") {
     setBusy(`${showing.id}:${action}`);
@@ -100,13 +118,23 @@ export function ShowingsInbox({
     <>
       <PageHeader title={title} description={description} actions={<LiveIndicator state={streamState} />} />
 
-      <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="mb-4">
+      <Tabs value={tab} onValueChange={(v) => changeTab(v as Tab)} className="mb-4">
         <TabsList>
           {TABS.map((t) => (
             <TabsTrigger key={t} value={t}>
               {t}
               {showings.data ? (
-                <span className="ml-1 rounded-full bg-muted px-1.5 text-xs tabular-nums text-muted-foreground">
+                <span
+                  className={cn(
+                    "ml-1 rounded-full bg-muted px-1.5 text-xs tabular-nums text-muted-foreground",
+                    t === "Requested" && unseenRequests > 0 && "bg-amber-200 font-semibold text-amber-950",
+                  )}
+                  aria-label={
+                    t === "Requested" && unseenRequests > 0
+                      ? `${counts[t]} requested, ${unseenRequests} new`
+                      : undefined
+                  }
+                >
                   {counts[t]}
                 </span>
               ) : null}

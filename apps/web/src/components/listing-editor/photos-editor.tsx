@@ -6,10 +6,10 @@ import { ListingPhoto } from "@/components/listing/listing-photo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-function isHttpUrl(value: string): boolean {
+/** The API only accepts https photo URLs. */
+function isHttpsUrl(value: string): boolean {
   try {
-    const url = new URL(value);
-    return url.protocol === "https:" || url.protocol === "http:";
+    return new URL(value).protocol === "https:";
   } catch {
     return false;
   }
@@ -31,8 +31,12 @@ export function PhotosEditor({
   function add(event?: { preventDefault: () => void }) {
     event?.preventDefault();
     const url = draft.trim();
-    if (!isHttpUrl(url)) {
-      setError("Paste a full image URL starting with https://");
+    if (!isHttpsUrl(url)) {
+      setError(
+        url.startsWith("http://")
+          ? "Photo URLs must use https:// (http:// is not accepted)."
+          : "Paste a full image URL starting with https://",
+      );
       return;
     }
     if (photos.includes(url)) {

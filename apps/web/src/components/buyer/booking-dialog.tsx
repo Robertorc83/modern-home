@@ -30,7 +30,8 @@ type HoldState =
   | { kind: "holding" }
   | { kind: "held"; hold: SlotHold }
   | { kind: "unheld" } // the API has no hold for us (e.g. holds disabled); booking still works
-  | { kind: "conflict"; message: string; alternatives: Slot[] };
+  | { kind: "conflict"; message: string; alternatives: Slot[] } // 409: someone else has it
+  | { kind: "failed"; message: string }; // network / server error: worth retrying
 
 // Releases run before the next hold is taken, so a quick re-open never races its own hold.
 let pendingRelease: Promise<unknown> = Promise.resolve();
@@ -96,7 +97,7 @@ export function BookingDialog({
     booked.current = false;
 
     const holdPromise: Promise<SlotHold | null> = pendingRelease.then(() =>
-      api.hold(listing.id, slot.startUtc).then(
+      api.hold(listing.id, slot.startUtc, searchTimeZone).then(
         (hold) => {
           if (active) setHoldState({ kind: "held", hold });
           return hold;
@@ -105,13 +106,15 @@ export function BookingDialog({
           if (!active) return null;
           if (err instanceof ApiError && err.status === 409) {
             setHoldState({ kind: "conflict", message: err.message, alternatives: err.alternatives });
-          } else if (err instanceof ApiError && [404, 405, 501].includes(err.status)) {
+          } else if (err instanceof ApiError && (err.status === 405 || err.status === 501)) {
+            // Holds are not supported by this API; booking still works.
             setHoldState({ kind: "unheld" });
+          } else if (err instanceof ApiError && err.status === 404) {
+            setHoldState({ kind: "failed", message: "This listing is no longer available." });
           } else {
             setHoldState({
-              kind: "conflict",
-              message: err instanceof Error ? err.message : "Could not hold this slot.",
-              alternatives: [],
+              kind: "failed",
+              message: err instanceof Error ? err.message : "Could not reach the server.",
             });
           }
           return null;
@@ -123,7 +126,7 @@ export function BookingDialog({
       active = false;
       if (!booked.current) release(holdPromise);
     };
-  }, [listing, slot, attempt]);
+  }, [listing, slot, attempt, searchTimeZone]);
 
   const expiresAt = holdState.kind === "held" ? holdState.hold.expiresAt : null;
   const secondsLeft = useCountdown(expiresAt);
@@ -134,7 +137,7 @@ export function BookingDialog({
     setBooking(true);
     setBookError(null);
     try {
-      const showing = await api.book(listing.id, slot.startUtc);
+      const showing = await api.book(listing.id, slot.startUtc, searchTimeZone);
       booked.current = true;
       toast.success(showing.status === "Confirmed" ? "Showing confirmed" : "Showing requested", {
         description: `${showing.listingAddress} · ${showing.listingLocalLabel}`,
@@ -162,7 +165,8 @@ export function BookingDialog({
     !booking && !expired && (holdState.kind === "held" || holdState.kind === "unheld") && !bookError;
 
   return (
-    <Dialog open={target !== null} onOpenChange={(open) => (!open ? onClose() : undefined)}>
+    // Closing while the booking request is in flight would release the hold under it; wait instead.
+    <Dialog open={target !== null} onOpenChange={(open) => (!open && !booking ? onClose() : undefined)}>
       <DialogContent className="sm:max-w-md">
         {listing && slot ? (
           <>
@@ -215,6 +219,7 @@ export function BookingDialog({
                       key={alt.startUtc}
                       slot={alt}
                       label={`${formatLocalDate(alt.localStart)} · ${alt.label}`}
+                      showListingTime={zonesDiffer}
                       onSelect={(next) => {
                         setBookError(null);
                         setHoldState({ kind: "holding" });
@@ -301,6 +306,19 @@ function HoldStatus({
       <Alert variant="destructive">
         <AlertTitle>This slot is no longer available</AlertTitle>
         <AlertDescription>{state.message}</AlertDescription>
+      </Alert>
+    );
+  }
+  if (state.kind === "failed") {
+    return (
+      <Alert variant="destructive">
+        <AlertTitle>Couldn&apos;t reserve the slot</AlertTitle>
+        <AlertDescription className="flex items-center justify-between gap-2">
+          <span>{state.message}</span>
+          <Button size="sm" variant="outline" onClick={onRetry}>
+            Retry
+          </Button>
+        </AlertDescription>
       </Alert>
     );
   }

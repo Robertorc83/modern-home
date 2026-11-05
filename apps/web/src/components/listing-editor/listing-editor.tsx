@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState, type ReactNode } from "react";
+import { cloneElement, isValidElement, useMemo, useState, type ReactNode } from "react";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/page-header";
 import { ErrorState, ListSkeleton } from "@/components/states";
 import { StatusBadge } from "@/components/status-badge";
 import { useUser } from "@/components/user-context";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -56,7 +57,34 @@ interface DetailsForm {
   lng: string;
 }
 
-type FieldErrors = Partial<Record<keyof DetailsForm | "leadTimeHours" | "horizonDays", string>>;
+/** Rule numbers typed by the agent; kept as strings so clearing the input never yields NaN. */
+interface RuleNumbers {
+  leadTimeHours: string;
+  horizonDays: string;
+}
+
+type FieldName = keyof DetailsForm | keyof RuleNumbers;
+type FieldErrors = Partial<Record<FieldName, string>>;
+
+const FIELD_NAMES = new Set<string>([
+  "address",
+  "city",
+  "neighborhood",
+  "price",
+  "beds",
+  "baths",
+  "propertyType",
+  "hoaMonthly",
+  "floor",
+  "lotSizeSqft",
+  "description",
+  "status",
+  "timeZone",
+  "lat",
+  "lng",
+  "leadTimeHours",
+  "horizonDays",
+]);
 
 const DEFAULT_RULES: ShowingRules = {
   slotMinutes: 30,
@@ -101,7 +129,7 @@ function parseNumber(value: string): number | null {
   return Number.isFinite(n) ? n : NaN;
 }
 
-function validate(form: DetailsForm, rules: ShowingRules): FieldErrors {
+function validate(form: DetailsForm, numbers: RuleNumbers): FieldErrors {
   const errors: FieldErrors = {};
   if (!form.address.trim()) errors.address = "Address is required.";
   if (!form.city.trim()) errors.city = "City is required.";
@@ -123,11 +151,17 @@ function validate(form: DetailsForm, rules: ShowingRules): FieldErrors {
     errors.lat = "Latitude is -90 to 90.";
   else if (lng !== null && (Number.isNaN(lng) || lng < -180 || lng > 180))
     errors.lng = "Longitude is -180 to 180.";
-  if (!Number.isInteger(rules.leadTimeHours) || rules.leadTimeHours < 0)
-    errors.leadTimeHours = "0 or more hours.";
-  if (!Number.isInteger(rules.horizonDays) || rules.horizonDays < 1 || rules.horizonDays > 90)
+  const lead = parseNumber(numbers.leadTimeHours);
+  if (lead === null || !Number.isInteger(lead) || lead < 0) errors.leadTimeHours = "0 or more hours.";
+  const horizon = parseNumber(numbers.horizonDays);
+  if (horizon === null || !Number.isInteger(horizon) || horizon < 1 || horizon > 90)
     errors.horizonDays = "1 to 90 days.";
   return errors;
+}
+
+/** The rules as the API wants them: validated numbers merged into the structured part. */
+function toRules(rules: ShowingRules, numbers: RuleNumbers): ShowingRules {
+  return { ...rules, leadTimeHours: Number(numbers.leadTimeHours), horizonDays: Number(numbers.horizonDays) };
 }
 
 function toInput(
@@ -165,21 +199,32 @@ function toInput(
     timeZone: form.timeZone,
     location: lat !== null && lng !== null ? { lat, lng } : null,
     showingRules: rules,
+    // Optimistic concurrency: the API rejects the save (409) if someone else saved meanwhile.
+    version: original?.version,
   };
 }
 
-/** Maps ASP.NET validation keys ("Address", "showingRules.weekly[0]") to our field names. */
-function apiFieldErrors(err: ApiError): FieldErrors {
-  const result: FieldErrors = {};
+/**
+ * Maps ASP.NET validation keys ("Address", "showingRules.weekly[0]") to our field names. Messages
+ * for anything this form does not render as a field (e.g. "weekly") are returned separately so they
+ * can be shown at the top of the form instead of disappearing.
+ */
+function apiFieldErrors(err: ApiError): { fields: FieldErrors; other: string[] } {
+  const fields: FieldErrors = {};
+  const other: string[] = [];
   for (const [key, messages] of Object.entries(err.problem.errors ?? {})) {
     const field = key
       .split(".")
       .pop()!
       .replace(/\[\d+\]$/, "");
-    const name = (field.charAt(0).toLowerCase() + field.slice(1)) as keyof FieldErrors;
-    result[name] = messages[0];
+    const name = field.charAt(0).toLowerCase() + field.slice(1);
+    if (FIELD_NAMES.has(name)) fields[name as FieldName] = messages[0];
+    else other.push(...messages);
   }
-  return result;
+  if (Object.keys(fields).length === 0 && other.length === 0 && err.problem.detail) {
+    other.push(err.problem.detail);
+  }
+  return { fields, other };
 }
 
 export function ListingEditor({ id }: { id?: string }) {
@@ -208,7 +253,14 @@ export function ListingEditor({ id }: { id?: string }) {
       </>
     );
   }
-  return <EditorForm key={listing.data?.id ?? "new"} original={listing.data} />;
+  // Keyed on the version too, so a reload after a stale-save conflict starts the form from fresh data.
+  return (
+    <EditorForm
+      key={listing.data ? `${listing.data.id}:${listing.data.version ?? 0}` : "new"}
+      original={listing.data}
+      onReload={listing.reload}
+    />
+  );
 }
 
 function BackLink() {
@@ -222,7 +274,7 @@ function BackLink() {
   );
 }
 
-function EditorForm({ original }: { original: Listing | null }) {
+function EditorForm({ original, onReload }: { original: Listing | null; onReload: () => void }) {
   const user = useUser();
   const router = useRouter();
   const defaultZone = (TIME_ZONES as readonly string[]).includes(user.timeZone)
@@ -231,8 +283,13 @@ function EditorForm({ original }: { original: Listing | null }) {
   const [saved, setSaved] = useState<Listing | null>(original);
   const [form, setForm] = useState<DetailsForm>(() => toForm(original, defaultZone));
   const [rules, setRules] = useState<ShowingRules>(() => original?.showingRules ?? DEFAULT_RULES);
+  const [numbers, setNumbers] = useState<RuleNumbers>(() => {
+    const r = original?.showingRules ?? DEFAULT_RULES;
+    return { leadTimeHours: str(r.leadTimeHours), horizonDays: str(r.horizonDays) };
+  });
   const [photos, setPhotos] = useState<string[]>(() => original?.photos ?? []);
   const [errors, setErrors] = useState<FieldErrors>({});
+  const [formError, setFormError] = useState<string[]>([]);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [previewVersion, setPreviewVersion] = useState(0);
@@ -251,27 +308,49 @@ function EditorForm({ original }: { original: Listing | null }) {
     setDirty(true);
   }
 
+  function setNumber(key: keyof RuleNumbers, value: string) {
+    setNumbers((n) => ({ ...n, [key]: value }));
+    setErrors((e) => ({ ...e, [key]: undefined }));
+    setDirty(true);
+  }
+
   async function save() {
-    const fieldErrors = validate(form, rules);
+    const fieldErrors = validate(form, numbers);
     setErrors(fieldErrors);
+    setFormError([]);
     if (Object.keys(fieldErrors).length > 0 || hasWeeklyErrors) {
       toast.error("Fix the highlighted fields before saving.");
       return;
     }
     setSaving(true);
-    const input = toInput(form, rules, photos, saved);
+    const nextRules = toRules(rules, numbers);
+    const input = toInput(form, nextRules, photos, saved);
     try {
-      const result = saved ? await api.updateListing(saved.id, input) : await api.createListing(input);
-      // Rules have their own endpoint; save them explicitly so they never depend on the listing body.
-      await api.saveRules(result.id, rules);
-      setSaved({ ...result, showingRules: rules });
+      let result: Listing;
+      if (saved) {
+        result = await api.updateListing(saved.id, input);
+        // Rules have their own endpoint; save them explicitly so they never depend on the listing body.
+        await api.saveRules(result.id, nextRules);
+      } else {
+        // One request: the rules travel in the create body, so a retry can never create a duplicate.
+        result = await api.createListing(input);
+      }
+      setSaved({ ...result, showingRules: result.showingRules ?? nextRules });
       setDirty(false);
       setPreviewVersion((v) => v + 1);
       toast.success(saved ? "Listing saved" : "Listing created");
       if (!saved) router.replace(`/agent/listings/${result.id}`);
     } catch (err) {
-      if (err instanceof ApiError) {
-        setErrors(apiFieldErrors(err));
+      if (err instanceof ApiError && err.status === 409 && saved) {
+        // Someone else saved this listing since it was loaded; the user has to start from their copy.
+        toast.error(err.message, {
+          duration: 10_000,
+          action: { label: "Reload", onClick: onReload },
+        });
+      } else if (err instanceof ApiError) {
+        const { fields, other } = apiFieldErrors(err);
+        setErrors(fields);
+        setFormError(other);
         toast.error(err.message);
       } else {
         toast.error("Could not save the listing.");
@@ -340,8 +419,9 @@ function EditorForm({ original }: { original: Listing | null }) {
               type="number"
               min={0}
               step={1}
-              value={rules.leadTimeHours}
-              onChange={(e) => setRule("leadTimeHours", e.target.valueAsNumber)}
+              inputMode="numeric"
+              value={numbers.leadTimeHours}
+              onChange={(e) => setNumber("leadTimeHours", e.target.value)}
             />
           </Field>
           <Field label="Book ahead (days)" htmlFor="horizonDays" error={errors.horizonDays}>
@@ -351,8 +431,9 @@ function EditorForm({ original }: { original: Listing | null }) {
               min={1}
               max={90}
               step={1}
-              value={rules.horizonDays}
-              onChange={(e) => setRule("horizonDays", e.target.valueAsNumber)}
+              inputMode="numeric"
+              value={numbers.horizonDays}
+              onChange={(e) => setNumber("horizonDays", e.target.value)}
             />
           </Field>
         </div>
@@ -601,6 +682,18 @@ function EditorForm({ original }: { original: Listing | null }) {
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
         <div className="space-y-6">
+          {formError.length > 0 ? (
+            <Alert variant="destructive" role="alert">
+              <AlertTitle>The listing could not be saved</AlertTitle>
+              <AlertDescription>
+                <ul className={formError.length > 1 ? "list-disc pl-4" : undefined}>
+                  {formError.map((message) => (
+                    <li key={message}>{message}</li>
+                  ))}
+                </ul>
+              </AlertDescription>
+            </Alert>
+          ) : null}
           {saved ? (
             <>
               {rulesCard}
@@ -639,11 +732,21 @@ function Field({
   className?: string;
   children: ReactNode;
 }) {
+  const errorId = `${htmlFor}-error`;
+  // Point assistive tech at the message: the control is the single child (an Input or a Select root).
+  const control =
+    error && isValidElement<Record<string, unknown>>(children)
+      ? cloneElement(children, { "aria-invalid": true, "aria-describedby": errorId })
+      : children;
   return (
     <div className={`space-y-2 ${className ?? ""}`}>
       <Label htmlFor={htmlFor}>{label}</Label>
-      {children}
-      {error ? <p className="text-xs text-destructive">{error}</p> : null}
+      {control}
+      {error ? (
+        <p id={errorId} className="text-xs text-destructive">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }
