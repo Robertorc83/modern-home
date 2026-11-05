@@ -19,6 +19,8 @@ public interface ITenantContext
     string UserId { get; }
     string Role { get; }
     string? UserName { get; }
+    /// <summary>The user's preferred IANA zone (display only; never used for storage).</summary>
+    string? TimeZone { get; }
     bool IsInRole(string role);
 }
 
@@ -33,10 +35,11 @@ public sealed class TenantContext : ITenantContext
     public string UserId => _userId ?? throw new InvalidOperationException("User is not set for this scope.");
     public string Role => _role ?? throw new InvalidOperationException("Role is not set for this scope.");
     public string? UserName { get; private set; }
+    public string? TimeZone { get; private set; }
 
     public bool IsInRole(string role) => string.Equals(_role, role, StringComparison.Ordinal);
 
-    public void Set(string tenantId, string userId, string role, string? userName = null)
+    public void Set(string tenantId, string userId, string role, string? userName = null, string? timeZone = null)
     {
         if (_tenantId is not null && _tenantId != tenantId)
             throw new InvalidOperationException("Tenant context cannot change within a scope.");
@@ -44,5 +47,6 @@ public sealed class TenantContext : ITenantContext
         _userId = userId;
         _role = role;
         UserName = userName;
+        TimeZone = timeZone;
     }
 }

@@ -1,0 +1,51 @@
+name: home-showing-scheduler
+
+services:
+  mongo:
+    image: mongo:8.0
+    command: ["--replSet", "rs0", "--bind_ip_all", "--quiet"]
+    ports: ["27017:27017"]
+    volumes: [mongo-data:/data/db]
+    healthcheck:
+      # Initiates the single node replica set on first boot (transactions and change streams need it).
+      test: ["CMD", "mongosh", "--quiet", "--eval", "try { rs.status().ok } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'mongo:27017'}]}).ok }"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 5s
+
+  api:
+    build: { context: ., dockerfile: src/Api/Dockerfile }
+    environment:
+      ASPNETCORE_HTTP_PORTS: "8080"
+      Mongo__ConnectionString: mongodb://mongo:27017/?replicaSet=rs0&directConnection=true
+      Auth__SigningKey: ${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-0123456789abcdef}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      Seed__Enabled: "true"
+    ports: ["5080:8080"]
+    depends_on:
+      mongo: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  worker:
+    build: { context: ., dockerfile: src/Worker/Dockerfile }
+    environment:
+      Mongo__ConnectionString: mongodb://mongo:27017/?replicaSet=rs0&directConnection=true
+    depends_on:
+      api: { condition: service_healthy }
+
+  web:
+    build: { context: apps/web }
+    environment:
+      API_URL: http://api:8080
+      NEXT_PUBLIC_MCP_URL: ${PUBLIC_MCP_URL:-http://localhost:5080/mcp}
+    ports: ["3000:3000"]
+    depends_on:
+      api: { condition: service_healthy }
+
+volumes:
+  mongo-data:
